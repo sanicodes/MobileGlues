@@ -39,6 +39,18 @@ else()
     set(CMAKE_ANDROID_STL_TYPE c++_static)
 endif()
 
+option(MOBILEGLUES_BUILD_SHADER_TESTS "Build host-side shader translation regression tests" OFF)
+if(MOBILEGLUES_BUILD_SHADER_TESTS)
+    enable_testing()
+    add_executable(shader_translation_test tests/shader_translation_test.cpp gl/glsl/glsl_for_es.cpp)
+    target_include_directories(shader_translation_test PRIVATE . include)
+    target_compile_options(shader_translation_test PRIVATE -ffunction-sections -fdata-sections)
+    target_link_options(shader_translation_test PRIVATE -Wl,--gc-sections)
+    target_link_libraries(shader_translation_test PRIVATE glslang::glslang
+        glslang::glslang-default-resource-limits spirv-cross-c)
+    add_test(NAME shader_translation COMMAND shader_translation_test)
+endif()
+
 if (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     # Check if ThinLTO or LTO is suppported
     include(CheckIPOSupported)

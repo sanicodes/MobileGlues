@@ -9,7 +9,7 @@
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/Include/Types.h>
 #include <glslang/Public/ShaderLang.h>
-#include <spirv_cross/spirv_cross_c.h>
+#include "essl_compiler.h"
 #include <iostream>
 #include <fstream>
 #include "../log.h"
@@ -248,8 +248,15 @@ std::string process_uniform_declarations(const std::string& glslCode) {
 
     result.reserve(glslCode.length());
 
+    const auto is_identifier = [](unsigned char ch) {
+        return std::isalnum(ch) || ch == '_';
+    };
     while (scan_pos < length) {
-        if (glslCode.compare(scan_pos, 7, "uniform") == 0) {
+        // Generated block instances can be named _uniform or _uniform_0. A
+        // substring match there used to turn comparisons into declarations.
+        if (glslCode.compare(scan_pos, 7, "uniform") == 0 &&
+            (scan_pos == 0 || !is_identifier(glslCode[scan_pos - 1])) &&
+            (scan_pos + 7 == length || !is_identifier(glslCode[scan_pos + 7]))) {
             if (scan_pos > chunk_start) {
                 result.append(glslCode, chunk_start, scan_pos - chunk_start);
             }
@@ -350,7 +357,7 @@ std::string GLSLtoGLSLES(const char* glsl_code, GLenum glsl_type, uint essl_vers
                          int& return_code) {
     std::string sha256_string(glsl_code);
     sha256_string += "\n//" + std::to_string(MAJOR) + "." + std::to_string(MINOR) + "." + std::to_string(REVISION) +
-                     "|" + std::to_string(essl_version);
+                     "|" + std::to_string(essl_version) + "|translator=1";
     const char* cachedESSL = Cache::get_instance().get(sha256_string.c_str());
     if (cachedESSL) {
         LOG_D("GLSL Hit Cache:\n%s\n-->\n%s", glsl_code, cachedESSL)
@@ -747,95 +754,21 @@ std::vector<unsigned int> glsl_to_spirv(GLenum shader_type, int glsl_version, co
     return spirv_code;
 }
 
-// The context owns the ParsedIR, the compiler and every string they hand back, and the only
-// destroy used to sit past the early return. A shader the ES backend rejects is a normal
-// outcome and failed translations are not cached, so that leaked the lot again on every
-// resource-pack reload. Scoped so no exit can skip it.
-namespace {
-struct spvc_context_guard_t {
-    spvc_context context = nullptr;
-    spvc_context_guard_t() = default;
-    ~spvc_context_guard_t() {
-        if (context) spvc_context_destroy(context);
-    }
-    spvc_context_guard_t(const spvc_context_guard_t&) = delete;
-    spvc_context_guard_t& operator=(const spvc_context_guard_t&) = delete;
-};
-} // namespace
-
-// SPIRV-Cross throws internally and turns that into a result code at its C boundary; on failure
-// it leaves the out-parameter untouched. Dropping the code therefore hands the next call a
-// handle that was never written, which crashes rather than reporting anything.
-static bool spvc_ok(spvc_context context, spvc_result res, const char* what) {
-    if (res == SPVC_SUCCESS) {
-        return true;
-    }
-    LOG_E("Error: %s failed in spirv-cross: %s", what, spvc_context_get_last_error_string(context))
-    return false;
-}
-
 std::string spirv_to_essl(std::vector<unsigned int> spirv, uint essl_version, int& errc) {
-    spvc_parsed_ir ir = nullptr;
-    spvc_compiler compiler_glsl = nullptr;
-    spvc_compiler_options options = nullptr;
-    const char* result = nullptr;
-
-    const SpvId* p_spirv = spirv.data();
-    size_t word_count = spirv.size();
-
-    LOG_D("spirv_code.size(): %d", spirv.size())
-
-    // Declared before 'essl': the compiled source lives in context-owned memory and is only
-    // copied out when the std::string is constructed, so the guard has to outlive it.
-    spvc_context_guard_t guard;
-    if (spvc_context_create(&guard.context) != SPVC_SUCCESS || !guard.context) {
-        LOG_E("Error: could not create a spirv-cross context.")
+    try {
+        ESSLCompiler compiler(std::move(spirv));
+        auto options = compiler.get_common_options();
+        options.version = std::max(essl_version, 300u);
+        options.es = true;
+        compiler.set_common_options(options);
+        auto source = compiler.compile();
+        errc = 0;
+        return source;
+    } catch (const std::exception& error) {
+        LOG_E("Error converting SPIR-V to ESSL: %s", error.what())
         errc = -1;
         return "";
     }
-    spvc_context context = guard.context;
-
-    if (!spvc_ok(context, spvc_context_parse_spirv(context, p_spirv, word_count, &ir), "spvc_context_parse_spirv") ||
-        !ir) {
-        errc = -1;
-        return "";
-    }
-    if (!spvc_ok(context,
-                 spvc_context_create_compiler(context, SPVC_BACKEND_GLSL, ir, SPVC_CAPTURE_MODE_TAKE_OWNERSHIP,
-                                              &compiler_glsl),
-                 "spvc_context_create_compiler") ||
-        !compiler_glsl) {
-        errc = -1;
-        return "";
-    }
-    if (!spvc_ok(context, spvc_compiler_create_compiler_options(compiler_glsl, &options),
-                 "spvc_compiler_create_compiler_options") ||
-        !options) {
-        errc = -1;
-        return "";
-    }
-    // A silently dropped GLSL_ES option would emit desktop GLSL and hand it straight to the
-    // driver, so these are checked too.
-    if (!spvc_ok(context,
-                 spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION,
-                                                essl_version >= 300 ? essl_version : 300),
-                 "spvc_compiler_options_set_uint") ||
-        !spvc_ok(context, spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE),
-                 "spvc_compiler_options_set_bool") ||
-        !spvc_ok(context, spvc_compiler_install_compiler_options(compiler_glsl, options),
-                 "spvc_compiler_install_compiler_options")) {
-        errc = -1;
-        return "";
-    }
-    if (!spvc_ok(context, spvc_compiler_compile(compiler_glsl, &result), "spvc_compiler_compile") || !result) {
-        errc = -1;
-        return "";
-    }
-
-    std::string essl = result;
-
-    errc = 0;
-    return essl;
 }
 
 static bool glslang_inited = false;

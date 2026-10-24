@@ -62,7 +62,7 @@ void proc_init() {
 
     LOG_V("Initializing %s ...", RENDERERNAME);
     LOG_V("[MobileGlues] Build: %d.%d.%d%s", MAJOR, MINOR, REVISION, VERSION_SUFFIX);
-    LOG_V("[MobileGlues] Renderer: cached raw-depth sampler copies; application texture and sampler state preserved.");
+    LOG_V("[MobileGlues] Renderer: active raw-depth sampler copies; application texture and sampler state preserved.");
     show_license();
 
     init_settings();

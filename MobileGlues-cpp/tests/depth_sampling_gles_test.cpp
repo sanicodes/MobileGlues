@@ -13,9 +13,6 @@
 #include <cstdlib>
 #include <dlfcn.h>
 #include <string>
-#include <chrono>
-#include <algorithm>
-#include <array>
 
 UnorderedMap<GLuint, bool> program_map_is_sampler_buffer_emulated;
 thread_local MGContext* g_current_ctx = nullptr;
@@ -97,7 +94,7 @@ int main() {
     if (!egl || !gl) return 1;
     LOAD(egl, eglGetPlatformDisplay); LOAD(egl, eglInitialize); LOAD(egl, eglChooseConfig);
     LOAD(egl, eglBindAPI); LOAD(egl, eglCreatePbufferSurface); LOAD(egl, eglCreateContext);
-    LOAD(egl, eglMakeCurrent); LOAD(egl, eglDestroyContext);
+    LOAD(egl, eglMakeCurrent);
     EGLAttrib angle_attributes[] = {0x3203 /* EGL_PLATFORM_ANGLE_TYPE_ANGLE */,
             0x3450 /* EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE */,
             0x3209 /* EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE */,
@@ -132,13 +129,12 @@ int main() {
     driver_get_int(GL_MAJOR_VERSION, &major_gl); driver_get_int(GL_MINOR_VERSION, &minor_gl);
     test_hardware.es_version = major_gl * 100 + minor_gl * 10;
     mg_texture_bind_context(1, 1);
-#define DRIVER(name) GLES.name = reinterpret_cast<decltype(GLES.name)>(dlsym(gl, #name)); \
-    if (!GLES.name) { std::fprintf(stderr, "Missing driver function %s\n", #name); return 1; }
+#define DRIVER(name) GLES.name = reinterpret_cast<decltype(GLES.name)>(dlsym(gl, #name))
     DRIVER(glGetError); DRIVER(glGetIntegerv); DRIVER(glActiveTexture);
-    DRIVER(glDeleteTextures); DRIVER(glBindTexture); DRIVER(glTexStorage2D); DRIVER(glTexParameteri);
+    DRIVER(glBindTexture); DRIVER(glTexStorage2D); DRIVER(glTexParameteri);
     DRIVER(glGenSamplers); DRIVER(glDeleteSamplers); DRIVER(glIsSampler);
     DRIVER(glSamplerParameteri); DRIVER(glSamplerParameterf); DRIVER(glBindSampler);
-    DRIVER(glFinish); DRIVER(glGetStringi); DRIVER(glGetActiveUniform); DRIVER(glGetUniformiv); DRIVER(glGetIntegeri_v);
+    DRIVER(glGetStringi); DRIVER(glGetActiveUniform); DRIVER(glGetUniformiv); DRIVER(glGetIntegeri_v);
     DRIVER(glGetSamplerParameteriv); DRIVER(glGetSamplerParameterfv);
     DRIVER(glGetTexLevelParameteriv); DRIVER(glGetTexParameterfv); DRIVER(glSamplerParameterfv);
     DRIVER(glTexParameterf); DRIVER(glTexImage2D); DRIVER(glGetTexParameteriv); DRIVER(glPixelStorei);
@@ -205,78 +201,7 @@ int main() {
     }
     std::printf("Raw depth 0.75: incomplete pairing sampled %u; corrected pairing sampled %u (expected 191/192).\n",
                 pixels[0][0], pixels[1][0]);
-    if (const char* iterations_env = std::getenv("MG_DEPTH_BENCH_ITERATIONS")) {
-        const int iterations = std::max(1, std::atoi(iterations_env));
-        struct Counters { long generated = 0, deleted = 0, writes = 0; };
-        static Counters metrics;
-        static auto gen = GLES.glGenSamplers;
-        static auto del = GLES.glDeleteSamplers;
-        static auto param_i = GLES.glSamplerParameteri;
-        static auto param_f = GLES.glSamplerParameterf;
-        static auto param_fv = GLES.glSamplerParameterfv;
-        GLES.glGenSamplers = [](GLsizei n, GLuint* names) { metrics.generated += n; gen(n, names); };
-        GLES.glDeleteSamplers = [](GLsizei n, const GLuint* names) { metrics.deleted += n; del(n, names); };
-        GLES.glSamplerParameteri = [](GLuint n, GLenum p, GLint v) { ++metrics.writes; param_i(n, p, v); };
-        GLES.glSamplerParameterf = [](GLuint n, GLenum p, GLfloat v) { ++metrics.writes; param_f(n, p, v); };
-        GLES.glSamplerParameterfv = [](GLuint n, GLenum p, const GLfloat* v) { ++metrics.writes; param_fv(n, p, v); };
-        std::array<double, 5> timings{};
-        for (auto& timing : timings) {
-            const auto begin = std::chrono::steady_clock::now();
-            for (int i = 0; i < iterations; ++i) { mg_depth_sampling_guard guard; }
-            timing = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count() / iterations;
-        }
-        std::sort(timings.begin(), timings.end());
-        std::printf("BENCH guard-only: %.3f us/guard median, %d iterations x 5; generated=%ld deleted=%ld sampler-writes=%ld\n",
-                    timings[2], iterations, metrics.generated, metrics.deleted, metrics.writes);
-        if (!std::getenv("MG_DEPTH_BENCH_ONLY"))
-            check(metrics.generated == 0 && metrics.deleted == 0 && metrics.writes == 0,
-                  "unchanged warmed depth draws allocate/delete/rewrite no samplers");
-        if (const char* draws_env = std::getenv("MG_DEPTH_BENCH_DRAW_ITERATIONS")) {
-            const int draws = std::max(1, std::atoi(draws_env));
-            const auto observer = GLES.glDrawArrays;
-            GLES.glDrawArrays = real_draw;
-            metrics = {};
-            for (auto& timing : timings) {
-                GLES.glFinish();
-                const auto begin = std::chrono::steady_clock::now();
-                for (int i = 0; i < draws; ++i) ::glDrawArrays(GL_TRIANGLES, 0, 3);
-                GLES.glFinish();
-                timing = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count() / draws;
-            }
-            std::sort(timings.begin(), timings.end());
-            std::printf("BENCH 4x4 draw+finish: %.3f us/draw median, %d iterations x 5; generated=%ld deleted=%ld sampler-writes=%ld\n",
-                        timings[2], draws, metrics.generated, metrics.deleted, metrics.writes);
-            GLES.glDrawArrays = observer;
-        }
-        GLES.glGenSamplers = gen; GLES.glDeleteSamplers = del;
-        GLES.glSamplerParameteri = param_i; GLES.glSamplerParameterf = param_f; GLES.glSamplerParameterfv = param_fv;
-        if (std::getenv("MG_DEPTH_BENCH_ONLY")) {
-            // This mode also runs with the v5 texture.cpp for an identical
-            // before/after harness; it does not certify the full regression set.
-            const GLenum error = glGetError();
-            std::printf("BENCH_ONLY mode; GL error %u\n", error);
-            return (error || std::abs(int(pixels[1][0]) - 191) > 1) ? 1 : 0;
-        }
-    }
-    check(last_private_sampler && GLES.glIsSampler(last_private_sampler), "private sampler is retained for reuse");
-    const GLuint first_private = last_private_sampler;
-    ::glDrawArrays(GL_TRIANGLES, 0, 3);
-    check(last_private_sampler == first_private, "identical draws reuse the private sampler name");
-    // A native state change is observed without relying on setter interception.
-    GLES.glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    GLES.glSamplerParameterf(sampler, GL_TEXTURE_MAX_LOD, 0.5f);
-    {
-        mg_depth_sampling_guard guard;
-        GLint bound = 0, wrap = 0; GLfloat lod = 0;
-        GLES.glGetIntegerv(GL_SAMPLER_BINDING, &bound);
-        GLES.glGetSamplerParameteriv(bound, GL_TEXTURE_WRAP_S, &wrap);
-        GLES.glGetSamplerParameterfv(bound, GL_TEXTURE_MAX_LOD, &lod);
-        check((GLuint)bound == first_private, "changed state reuses the private object");
-        check(wrap == GL_REPEAT && lod == 0.5f, "native parameter changes update the cached copy");
-    }
-    GLES.glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    GLES.glSamplerParameterf(sampler, GL_TEXTURE_MAX_LOD, 0.25f);
-    ::glDrawArrays(GL_TRIANGLES, 0, 3); // Warm the restored state before timing.
+    check(last_private_sampler && !GLES.glIsSampler(last_private_sampler), "private sampler is deleted after draw");
     GLuint colour_texture;
     glGenTextures(1, &colour_texture);
     ::glActiveTexture(GL_TEXTURE1);
@@ -425,71 +350,6 @@ int main() {
     ::glDrawArrays(GL_TRIANGLES, 0, 3);
     glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, colour_pixel);
     check(colour_pixel[0] == 255, "linear shadow comparison still works after program relink");
-    // Real shared EGL contexts must have separate cached samplers. Cleanup is
-    // deferred until a context in the correct share group is current.
-    EGLContext shared = eglCreateContext(display, config, context, context_attributes);
-    check(shared != EGL_NO_CONTEXT, "shared context is created");
-    if (shared == EGL_NO_CONTEXT) return 1;
-    check(eglMakeCurrent(display, surface, surface, shared), "shared context becomes current");
-    mg_texture_bind_context(2, 1);
-    glUseProgram(program); gl_state->current_program = program;
-    ::glActiveTexture(GL_TEXTURE0); ::glBindTexture(GL_TEXTURE_2D, textures[0]); ::glBindSampler(0, sampler);
-    ::glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
-    ::glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    ::glSamplerParameteri(sampler, GL_TEXTURE_COMPARE_MODE, GL_NONE);
-    GLuint shared_private = 0;
-    {
-        mg_depth_sampling_guard guard;
-        GLint bound = 0; GLES.glGetIntegerv(GL_SAMPLER_BINDING, &bound);
-        shared_private = bound;
-        check(shared_private && shared_private != sampler && shared_private != first_private,
-              "shared contexts do not mutate each other's private samplers");
-    }
-    check(GLES.glIsSampler(first_private) && GLES.glIsSampler(shared_private), "both context caches remain alive");
-    check(eglDestroyContext(display, context), "original EGL context is destroyed while shared context is current");
-    mg_texture_forget_context(1);
-    check(GLES.glIsSampler(first_private), "context cleanup does not call GL from the forget callback");
-    mg_texture_bind_context(2, 1);
-    check(!GLES.glIsSampler(first_private), "retired private sampler is deleted in its share group");
-    check(GLES.glIsSampler(shared_private), "live shared-context cache survives retired cleanup");
-    // A nested helper can rebind a different application sampler while an outer
-    // guard owns the cache entry. Its temporary fallback must leave that copy
-    // intact and delete only its own temporary sampler on return.
-    {
-        mg_depth_sampling_guard outer;
-        GLint outer_name = 0; GLES.glGetIntegerv(GL_SAMPLER_BINDING, &outer_name);
-        GLES.glBindSampler(0, sampler);
-        GLES.glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        GLuint nested_name = 0;
-        {
-            mg_depth_sampling_guard inner;
-            GLint name = 0, wrap = 0; GLES.glGetIntegerv(GL_SAMPLER_BINDING, &name);
-            nested_name = name;
-            check(nested_name && nested_name != (GLuint)outer_name, "nested state changes use a temporary fallback");
-            GLES.glGetSamplerParameteriv(outer_name, GL_TEXTURE_WRAP_S, &wrap);
-            check(wrap == GL_CLAMP_TO_EDGE, "nested helper does not modify a borrowed cached sampler");
-        }
-        check(!GLES.glIsSampler(nested_name), "nested temporary sampler is deleted");
-    }
-    GLES.glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    // Untracked contexts use version 5's temporary lifetime, since the layer
-    // cannot safely retain objects without a dependable context identity.
-    mg_texture_bind_context(0, 0);
-    GLuint fallback_texture; glGenTextures(1, &fallback_texture);
-    ::glBindTexture(GL_TEXTURE_2D, fallback_texture);
-    ::glTexStorage2D(GL_TEXTURE_2D, 1, GL_DEPTH_COMPONENT32F, 4, 4);
-    ::glBindSampler(0, sampler);
-    GLuint fallback_private = 0;
-    {
-        mg_depth_sampling_guard guard;
-        GLint bound = 0; GLES.glGetIntegerv(GL_SAMPLER_BINDING, &bound);
-        fallback_private = bound;
-        check(fallback_private && fallback_private != sampler, "untracked context still gets a private sampler");
-    }
-    check(!GLES.glIsSampler(fallback_private), "untracked context deletes its temporary sampler");
-    ::glDeleteTextures(1, &fallback_texture);
-    GLES.glBindTexture(GL_TEXTURE_2D, textures[0]);
-    mg_texture_bind_context(2, 1);
     GLenum error = glGetError();
     std::printf("GL error: %u; %d checks, %d failures\n", error, checks, failures);
     return ((angle_dir && pixels[0][0] != 0) || std::abs(int(pixels[1][0]) - 191) > 1

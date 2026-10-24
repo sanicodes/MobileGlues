@@ -1,4 +1,4 @@
-# MobileGlues (Sanicodes) 2.0.0-sanicodes.6
+# MobileGlues (Sanicodes) 2.0.0-sanicodes.7
 
 An ARM64 release of the Sanicodes fork with the Minecraft 26.3 shader fixes.
 The optimized native library uses CMake Release, ThinLTO and 16 KiB ELF page
@@ -7,40 +7,27 @@ disabled. The app manages its renderer settings directly, including ANGLE,
 error reporting, shader cache, extensions, OpenGL version, FSR 1, depth-clear
 workarounds, renderer identity and multi-draw preference orders.
 
-Version 6 optimizes the raw-depth sampling fix from version 5. Private samplers
-are retained per texture unit and tracked context. An unchanged effective state
-reuses the existing sampler without creating, deleting or configuring another
-object. Effective texture/sampler settings are still read each draw, so native,
-DSA and texture-only parameter changes remain visible. A changed state updates
-the retained copy. Only active raw-depth inputs get overrides; original sampler
-bindings and application texture/sampler parameters remain untouched.
+Version 7 is a recovery update after version 6 caused black rendering on the
+user's Mali/ANGLE device. The sampler-reuse optimization is removed. Rendering
+sources, native version and startup code exactly match the version 5 commit
+`c7b21f6`; the APK ships the **byte-identical native library extracted from the
+signed version 5 APK**. The independent settings app and Fabulous/raw-depth fix
+from version 5 remain.
 
-Each tracked context reserves 128 CPU cache slots; private GL sampler objects
-are allocated on demand. Shared contexts own separate copies. Retired names are deleted when another context in
-the same share group is selected; destroying the final GL share-group context
-also frees its GL resources. Nested borrowers and contexts without a dependable
-identity use temporary copies with the version 5 lifetime.
+The APK version is `2.0.0-sanicodes.7`, versionCode `200007`, so it installs over
+version 6 with the existing certificate. The native renderer intentionally
+reports `2.0.0-sanicodes.5` because the known working binary is reused unchanged.
+The user reported improved rendering and about 48 FPS with that renderer in
+Fabulous at 100% resolution. Recovery on the current phone session still needs
+to be confirmed. No new performance optimization is included.
 
-The user reports improved rendering on version 5, with about 48 FPS in Fabulous
-at 100% launcher resolution scale. Version 6 keeps graphics quality and the
-existing settings unchanged. Host microbenchmarks measure this sampler path,
-not Minecraft FPS; the device comparison is still required. See
-[PERFORMANCE_MC26_3.md](PERFORMANCE_MC26_3.md) for methodology and measurements.
-Version 3 remains withdrawn; its global texture-filter experiment is absent.
-
-The real-driver checks cover depth readback, shared colour samplers, LOD/wrap
-preservation, texture-only sampling, multiple depth layers, binding restoration,
-program relinking and shadow comparisons. New checks verify warm reuse without
-sampler allocation/configuration, native parameter changes, shared-context
-isolation, deferred cleanup, nested borrowing and the untracked-context fallback.
-The old host ANGLE build has a separate sampler-array remapping limitation that
-also reproduces without MobileGlues; the test reports it explicitly. Mesa
-validates the updated mapping numerically. Host success does not certify Mali
-performance or full-game compatibility.
+Version 6 is withdrawn. Its host tests and microbenchmark gains did not predict
+the device regression. [PERFORMANCE_MC26_3.md](PERFORMANCE_MC26_3.md) preserves the
+failed experiment's measurements and device result for investigation.
 
 ## Install or update
 
-Install `build/releases/MobileGlues-2.0.0-sanicodes.6-arm64.apk` directly over
+Install `build/releases/MobileGlues-2.0.0-sanicodes.7-arm64.apk` directly over
 the earlier test plugin or Sanicodes release. No uninstall is required.
 
 1. Open **MobileGlues (Sanicodes)** and tap **Allow access**. On Android 11+
@@ -64,8 +51,9 @@ access that shared directory; it is not used to scan unrelated files.
 The release preserves the earlier plugin's Android application ID and signing
 certificate so Android accepts the update. The app label, renderer label and
 version use the release name. The official plugin remains a separate app.
-The native driver version is `2.0.0-sanicodes.6`. The new `MG/latest.log` starts
-with `[MobileGlues] Build: 2.0.0-sanicodes.6`. The first affected draw logs
+The native driver version is intentionally `2.0.0-sanicodes.5`; `MG/latest.log`
+starts with `[MobileGlues] Build: 2.0.0-sanicodes.5`. This is expected for the
+version 7 recovery APK. The first affected draw logs
 `Raw depth sampling: using a private nearest-filtered sampler`.
 
 Cache clearing removes only the shader cache and its pending write, and asks
@@ -120,7 +108,7 @@ The release also updates the previous signed APK in place.
 
 ```sh
 ANDROID_SDK_ROOT=/path/to/sdk bash MobileGlues-cpp/tests/android/run.sh \
-  emulator-5580 build/releases/MobileGlues-2.0.0-sanicodes.6-arm64.apk
+  emulator-5580 build/releases/MobileGlues-2.0.0-sanicodes.7-arm64.apk
 ```
 
 Use a disposable emulator. The runner refuses physical-device serials and

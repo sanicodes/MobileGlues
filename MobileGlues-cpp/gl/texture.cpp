@@ -214,31 +214,15 @@ private:
 // pointer swap rather than an accessor at every use.
 namespace {
 
-struct depth_sampler_state_t {
-    std::array<GLint, 4> wrap_compare{};
-    std::array<GLfloat, 2> lod{};
-    std::array<GLfloat, 4> border{};
-    GLint min_filter = 0, mag_filter = 0;
-    bool operator==(const depth_sampler_state_t&) const = default;
-};
-struct depth_sampler_cache_t {
-    GLuint name = 0;
-    depth_sampler_state_t state;
-    bool in_use = false;
-};
-
 struct texture_group_state_t {
     std::vector<TextureObject*> objects;
     ska::flat_hash_map<GLuint, std::vector<GLint>> depth_sampler_locations;
-    std::vector<GLuint> retired_depth_samplers;
 };
 struct texture_ctx_state_t {
     std::array<TextureUnit, MAX_TEXTURE_IMAGE_UNITS> units;
     int current_unit = 0;
     int depth_sampler_es_version = 0;
     bool depth_sampler_border = false;
-    bool depth_sampler_cache_enabled = false;
-    std::array<depth_sampler_cache_t, MAX_TEXTURE_IMAGE_UNITS> depth_samplers;
     // What this layer last handed to GLES.glBindTexture / GLES.glActiveTexture,
     // i.e. the driver's side of the same state `units` and `current_unit` describe
     // from the application's side. The two are not one table because they answer
@@ -286,15 +270,6 @@ void mg_texture_bind_context(unsigned long long ctx_id, unsigned long long group
     g_tg = group.get();
     g_tc = ctx.get();
     g_tc->group = group_id;
-    g_tc->depth_sampler_cache_enabled = true;
-    // Forgetting a context happens after it is no longer current. Its sampler
-    // names belong to the share group; delete them only with a context from
-    // that group current. Destroying the last GL share-group context also
-    // releases its GL objects when no successor ever selects this record.
-    if (!g_tg->retired_depth_samplers.empty() && GLES.glDeleteSamplers) {
-        GLES.glDeleteSamplers(g_tg->retired_depth_samplers.size(), g_tg->retired_depth_samplers.data());
-        g_tg->retired_depth_samplers.clear();
-    }
 }
 
 void mg_texture_forget_context(unsigned long long ctx_id) {
@@ -302,11 +277,6 @@ void mg_texture_forget_context(unsigned long long ctx_id) {
     std::lock_guard<std::mutex> lock(g_tex_mutex);
     const auto it = g_tex_ctxs.find(ctx_id);
     if (it == g_tex_ctxs.end()) return;
-    const auto group = g_tex_groups.find(it->second->group);
-    if (group != g_tex_groups.end()) {
-        for (const auto& cached : it->second->depth_samplers)
-            if (cached.name) group->second->retired_depth_samplers.push_back(cached.name);
-    }
     if (g_tc == it->second.get()) g_tc = &g_tex_ctx_default;
     g_tex_ctxs.erase(it);
     // The object table is not dropped: it belongs to the share group, whose other
@@ -2176,53 +2146,36 @@ mg_depth_sampling_guard::mg_depth_sampling_guard() {
         get_int(GL_TEXTURE_COMPARE_MODE, &compare);
         if (!mg_depth_pairing_incomplete(tex->internal_format, compare, min_filter, mag_filter)) continue;
 
-        // Observe all effective state on every draw. Reuse does not assume
-        // application samplers are immutable, and needs no parameter shadow or
-        // invalidation hooks (texture-only, DSA and native setters all work).
-        depth_sampler_state_t state;
-        constexpr GLenum int_pnames[] = {GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TEXTURE_WRAP_R,
-                                          GL_TEXTURE_COMPARE_FUNC};
-        constexpr GLenum float_pnames[] = {GL_TEXTURE_MIN_LOD, GL_TEXTURE_MAX_LOD};
-        for (int index = 0; index < 4; ++index) get_int(int_pnames[index], &state.wrap_compare[index]);
-        for (int index = 0; index < 2; ++index) get_float(float_pnames[index], &state.lod[index]);
-        if (g_tc->depth_sampler_border) get_float(GL_TEXTURE_BORDER_COLOR, state.border.data());
-        state.min_filter = mg_depth_filter_make_legal(GL_TEXTURE_MIN_FILTER, min_filter);
-        state.mag_filter = mg_depth_filter_make_legal(GL_TEXTURE_MAG_FILTER, mag_filter);
-
-        auto& cached = g_tc->depth_samplers[unit];
-        // The fallback record has no dependable GL-context lifetime. Nested
-        // guards that encounter an already borrowed cache entry use a temporary
-        // copy rather than mutating an outer draw's sampler.
-        const bool retain = g_tc->depth_sampler_cache_enabled && !cached.in_use;
-        GLuint copy = retain ? cached.name : 0;
-        const bool update = !copy || !(state == cached.state);
-        if (!copy) GLES.glGenSamplers(1, &copy);
+        GLuint copy = 0;
+        GLES.glGenSamplers(1, &copy);
         if (!copy) continue;
-        if (update) {
-            for (int index = 0; index < 4; ++index)
-                GLES.glSamplerParameteri(copy, int_pnames[index], state.wrap_compare[index]);
-            for (int index = 0; index < 2; ++index)
-                GLES.glSamplerParameterf(copy, float_pnames[index], state.lod[index]);
-            if (g_tc->depth_sampler_border)
-                GLES.glSamplerParameterfv(copy, GL_TEXTURE_BORDER_COLOR, state.border.data());
-            GLES.glSamplerParameteri(copy, GL_TEXTURE_COMPARE_MODE, GL_NONE);
-            GLES.glSamplerParameteri(copy, GL_TEXTURE_MIN_FILTER, state.min_filter);
-            GLES.glSamplerParameteri(copy, GL_TEXTURE_MAG_FILTER, state.mag_filter);
+        // Copy the effective sampler, not the depth texture's defaults. LOD
+        // clamps and wrap/border state are essential to Minecraft's render
+        // targets. Neither the original sampler nor any texture is modified.
+        for (const GLenum pname : {GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TEXTURE_WRAP_R,
+                                   GL_TEXTURE_COMPARE_FUNC}) {
+            GLint value = 0;
+            get_int(pname, &value);
+            GLES.glSamplerParameteri(copy, pname, value);
         }
-        if (retain && !update) {
-            static thread_local bool reuse_announced = false;
-            if (!reuse_announced) {
-                LOG_I("Raw depth sampler cache: reusing unchanged state")
-                reuse_announced = true;
-            }
+        for (const GLenum pname : {GL_TEXTURE_MIN_LOD, GL_TEXTURE_MAX_LOD}) {
+            GLfloat value = 0;
+            get_float(pname, &value);
+            GLES.glSamplerParameterf(copy, pname, value);
         }
-        if (retain) {
-            cached.name = copy;
-            cached.state = state;
-            cached.in_use = true;
+        // Use capabilities of this context, not the initialization context.
+        if (g_tc->depth_sampler_border) {
+            GLfloat border[4]{};
+            get_float(GL_TEXTURE_BORDER_COLOR, border);
+            GLES.glSamplerParameterfv(copy, GL_TEXTURE_BORDER_COLOR, border);
         }
+        GLES.glSamplerParameteri(copy, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+        GLES.glSamplerParameteri(copy, GL_TEXTURE_MIN_FILTER,
+                                mg_depth_filter_make_legal(GL_TEXTURE_MIN_FILTER, min_filter));
+        GLES.glSamplerParameteri(copy, GL_TEXTURE_MAG_FILTER,
+                                mg_depth_filter_make_legal(GL_TEXTURE_MAG_FILTER, mag_filter));
         GLES.glBindSampler(unit, copy);
-        bindings[count++] = {(GLuint)unit, (GLuint)sampler, copy, retain};
+        bindings[count++] = {(GLuint)unit, (GLuint)sampler, copy};
         static thread_local bool announced = false;
         if (!announced) {
             LOG_I("Raw depth sampling: using a private nearest-filtered sampler (texture %u, unit %d)",
@@ -2237,7 +2190,6 @@ mg_depth_sampling_guard::~mg_depth_sampling_guard() {
     for (int index = count - 1; index >= 0; --index) {
         const Binding& binding = bindings[index];
         GLES.glBindSampler(binding.unit, binding.original);
-        if (binding.cached) g_tc->depth_samplers[binding.unit].in_use = false;
-        else GLES.glDeleteSamplers(1, &binding.temporary);
+        GLES.glDeleteSamplers(1, &binding.temporary);
     }
 }

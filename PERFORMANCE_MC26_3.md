@@ -1,4 +1,15 @@
-# Sanicodes 6 performance change
+# Withdrawn: Sanicodes 6 performance change
+
+**Device result: FAILED.** The user reports black rendering after installing
+version 6 on the Mali/ANGLE phone. Host correctness and timing results below
+did not catch this regression and do not establish a safe device optimization.
+Version 6 must not be recommended. Version 7 restores the exact native binary
+from version 5, which the user reported rendered much better at about 48 FPS.
+Sampler reuse is removed from the current sources. Its cause remains unresolved;
+no replacement performance optimization is included in version 7.
+
+The following measurements describe the withdrawn experiment at `2839311`.
+Its benchmark harness and reproduction instructions belong to that commit.
 
 Version 5 fixed raw-depth sampling with a fresh private sampler on each affected
 draw. Version 6 retains a private sampler per texture unit and tracked context.
@@ -82,4 +93,4 @@ prints `Raw depth sampler cache: reusing unchanged state` on the first cache hit
 
 The host results do not imply a corresponding Minecraft FPS increase. Full
 resolution Fabulous may be limited by GPU pixel/shader work that this change
-does not reduce. Device performance confirmation remains pending.
+does not reduce. The subsequent phone test failed with black rendering; version 6 is withdrawn.

@@ -141,19 +141,3 @@ from a different ANGLE revision is suppressed.
 Device acceptance: confirm native build `2.0.0-sanicodes.5`, start in Fancy, then
 check Fabulous with clouds/water behind solid geometry. Check terrain, GUI/item
 textures, glass, particles and FPS. Host test success is not a phone test result.
-
-
-## Sampler reuse and performance (Sanicodes 6)
-
-The same real-driver harness checks context-local reuse, native state changes,
-shared-context isolation and deferred object cleanup. Untracked contexts and
-nested borrowers retain the temporary-object fallback. For an instrumented
-microbenchmark, add `MG_DEPTH_BENCH_ITERATIONS=10000`; warm unchanged draws must
-allocate, delete and configure zero samplers. Optional
-`MG_DEPTH_BENCH_DRAW_ITERATIONS=1000` also times 4x4 draws with a GPU finish per
-batch. These are host measurements, not Minecraft frame rates.
-
-`MG_DEPTH_BENCH_ONLY=1` exits after the benchmark and initial depth readback;
-it does not run or certify the full regression set. This mode allows the same
-harness to be linked with version 5's `texture.cpp` for before/after comparisons.
-See [PERFORMANCE_MC26_3.md](PERFORMANCE_MC26_3.md).

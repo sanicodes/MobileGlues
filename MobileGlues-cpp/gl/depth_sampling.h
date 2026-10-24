@@ -7,7 +7,7 @@
 // the current program are considered. Private copies preserve the application's
 // sampler/texture state and cannot change colour units sharing the same sampler.
 class mg_depth_sampling_guard {
-    struct Binding { GLuint unit, original, temporary; };
+    struct Binding { GLuint unit, original, temporary; bool cached; };
     Binding bindings[128];
     int count = 0;
 public:

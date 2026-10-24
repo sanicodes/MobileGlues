@@ -1,4 +1,4 @@
-# MobileGlues (Sanicodes) 2.0.0-sanicodes.5
+# MobileGlues (Sanicodes) 2.0.0-sanicodes.6
 
 An ARM64 release of the Sanicodes fork with the Minecraft 26.3 shader fixes.
 The optimized native library uses CMake Release, ThinLTO and 16 KiB ELF page
@@ -7,36 +7,40 @@ disabled. The app manages its renderer settings directly, including ANGLE,
 error reporting, shader cache, extensions, OpenGL version, FSR 1, depth-clear
 workarounds, renderer identity and multi-draw preference orders.
 
-Version 5 adds a replacement for the Fabulous depth-sampling fix. It inspects
-only active `sampler2D` inputs of the current program. A sized depth image with
-comparison disabled and filtering that makes it incomplete on GLES receives a
-private nearest-filtered sampler for that draw. The copy retains wrap, LOD,
-comparison-function and supported border settings. Original texture and sampler
-parameters stay unchanged; original bindings are restored and private objects
-are deleted when the draw returns. Colour, integer and shadow samplers are left
-on their existing paths. Program reflection is invalidated on creation, link,
-binary load and deletion; sampler unit assignments are read at each draw.
+Version 6 optimizes the raw-depth sampling fix from version 5. Private samplers
+are retained per texture unit and tracked context. An unchanged effective state
+reuses the existing sampler without creating, deleting or configuring another
+object. Effective texture/sampler settings are still read each draw, so native,
+DSA and texture-only parameter changes remain visible. A changed state updates
+the retained copy. Only active raw-depth inputs get overrides; original sampler
+bindings and application texture/sampler parameters remain untouched.
 
-This does not restore version 3's global texture-filter rewrites, sampler
-unbinding fallback or new buffer-texture preparation on previously direct draw
-forwards. Version 3 was withdrawn after black terrain and GUI textures on the
-user's Mali/ANGLE device. Version 4 restored Fancy/Fast and remains the known
-working fallback. The startup shader fixes and independent settings app remain.
+Each tracked context reserves 128 CPU cache slots; private GL sampler objects
+are allocated on demand. Shared contexts own separate copies. Retired names are deleted when another context in
+the same share group is selected; destroying the final GL share-group context
+also frees its GL resources. Nested borrowers and contexts without a dependable
+identity use temporary copies with the version 5 lifetime.
 
-Version 5 is a signed ARM64 Release build for manual device validation. Host
-checks cover real production texture/draw wrappers with ANGLE Vulkan/SwiftShader
-and Mesa GLES, depth readback, shared colour samplers, LOD/wrap preservation,
-texture-only sampling, multiple depth layers, active-unit/binding restoration,
-private-object cleanup, program relinking and shadow comparisons. The old host
-ANGLE build has a separate sampler-array remapping limitation that reproduces
-without MobileGlues; the test reports it explicitly and compares with the
-legal direct-driver reference. Mesa validates the updated mapping numerically.
-These checks do not establish Minecraft compatibility on Mali. Fabulous cloud
-and water occlusion, ordinary textures and frame rate still need the phone test.
+The user reports improved rendering on version 5, with about 48 FPS in Fabulous
+at 100% launcher resolution scale. Version 6 keeps graphics quality and the
+existing settings unchanged. Host microbenchmarks measure this sampler path,
+not Minecraft FPS; the device comparison is still required. See
+[PERFORMANCE_MC26_3.md](PERFORMANCE_MC26_3.md) for methodology and measurements.
+Version 3 remains withdrawn; its global texture-filter experiment is absent.
+
+The real-driver checks cover depth readback, shared colour samplers, LOD/wrap
+preservation, texture-only sampling, multiple depth layers, binding restoration,
+program relinking and shadow comparisons. New checks verify warm reuse without
+sampler allocation/configuration, native parameter changes, shared-context
+isolation, deferred cleanup, nested borrowing and the untracked-context fallback.
+The old host ANGLE build has a separate sampler-array remapping limitation that
+also reproduces without MobileGlues; the test reports it explicitly. Mesa
+validates the updated mapping numerically. Host success does not certify Mali
+performance or full-game compatibility.
 
 ## Install or update
 
-Install `build/releases/MobileGlues-2.0.0-sanicodes.5-arm64.apk` directly over
+Install `build/releases/MobileGlues-2.0.0-sanicodes.6-arm64.apk` directly over
 the earlier test plugin or Sanicodes release. No uninstall is required.
 
 1. Open **MobileGlues (Sanicodes)** and tap **Allow access**. On Android 11+
@@ -60,8 +64,8 @@ access that shared directory; it is not used to scan unrelated files.
 The release preserves the earlier plugin's Android application ID and signing
 certificate so Android accepts the update. The app label, renderer label and
 version use the release name. The official plugin remains a separate app.
-The native driver version is `2.0.0-sanicodes.5`. The new `MG/latest.log` starts
-with `[MobileGlues] Build: 2.0.0-sanicodes.5`. The first affected draw logs
+The native driver version is `2.0.0-sanicodes.6`. The new `MG/latest.log` starts
+with `[MobileGlues] Build: 2.0.0-sanicodes.6`. The first affected draw logs
 `Raw depth sampling: using a private nearest-filtered sampler`.
 
 Cache clearing removes only the shader cache and its pending write, and asks
@@ -116,7 +120,7 @@ The release also updates the previous signed APK in place.
 
 ```sh
 ANDROID_SDK_ROOT=/path/to/sdk bash MobileGlues-cpp/tests/android/run.sh \
-  emulator-5580 build/releases/MobileGlues-2.0.0-sanicodes.5-arm64.apk
+  emulator-5580 build/releases/MobileGlues-2.0.0-sanicodes.6-arm64.apk
 ```
 
 Use a disposable emulator. The runner refuses physical-device serials and

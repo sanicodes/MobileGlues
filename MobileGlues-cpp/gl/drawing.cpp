@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: LGPL-2.1-only
 // End of Source File Header
 
+#include "depth_sampling.h"
 #include "drawing.h"
 #include "restart.h"
 #include "buffer.h"
@@ -205,6 +206,7 @@ void glDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const void
     LOG_D("glDrawElementsInstanced, mode: %d, count: %d, type: %d, indices: %p, primcount: %d", mode, count, type,
           indices, primcount)
     prepareForDraw();
+    mg_depth_sampling_guard depth_guard;
     if (mg_restart_needs_rewrite(type) && mg_draw_elements_restart(mode, count, type, indices, 0, primcount)) return;
     const bool restart_fixed = mg_restart_needs_driver_fixed(type);
     if (restart_fixed) GLES.glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
@@ -217,6 +219,7 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices
     LOG()
     LOG_D("glDrawElements, mode: %d, count: %d, type: %d, indices: %p", mode, count, type, indices)
     prepareForDraw();
+    mg_depth_sampling_guard depth_guard;
     if (mg_restart_needs_rewrite(type) && mg_draw_elements_restart(mode, count, type, indices, 0, -1)) return;
     const bool restart_fixed = mg_restart_needs_driver_fixed(type);
     if (restart_fixed) GLES.glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
@@ -302,6 +305,7 @@ void glDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const voi
     LOG_D("glDrawElementsBaseVertex, mode: %d, count: %d, type: %d, indices: %p, basevertex: %d", mode, count, type,
           indices, basevertex);
     prepareForDraw();
+    mg_depth_sampling_guard depth_guard;
     // The rewrite applies the base vertex itself, so it covers both the emulated
     // and the driver-supported branch below.
     if (mg_restart_needs_rewrite(type) && mg_draw_elements_restart(mode, count, type, indices, basevertex, -1)) return;
@@ -453,6 +457,7 @@ void glDrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, G
     LOG()
     LOG_D("glDrawRangeElements, mode: %d, start: %u, end: %u, count: %d, type: %d", mode, start, end, count, type)
     prepareForDraw();
+    mg_depth_sampling_guard depth_guard;
     // The rewritten stream is 32-bit with 0xFFFFFFFF sentinels, so start/end no
     // longer describe it. They are only a promise about the index range, and
     // dropping the promise is allowed; drawing the wrong primitives is not.
@@ -467,6 +472,7 @@ void glDrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsize
     LOG()
     LOG_D("glDrawRangeElementsBaseVertex, mode: %d, count: %d, type: %d, basevertex: %d", mode, count, type, basevertex)
     prepareForDraw();
+    mg_depth_sampling_guard depth_guard;
     if (mg_restart_needs_rewrite(type) && mg_draw_elements_restart(mode, count, type, indices, basevertex, -1)) return;
     restart_guard_t guard(type);
     if (GLES.glDrawRangeElementsBaseVertex) {
@@ -485,6 +491,7 @@ void glDrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type, 
     LOG_D("glDrawElementsInstancedBaseVertex, mode: %d, count: %d, type: %d, instancecount: %d, basevertex: %d", mode,
           count, type, instancecount, basevertex)
     prepareForDraw();
+    mg_depth_sampling_guard depth_guard;
     if (mg_restart_needs_rewrite(type) &&
         mg_draw_elements_restart(mode, count, type, indices, basevertex, instancecount))
         return;
@@ -525,6 +532,7 @@ void glDrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, 
                      baseinstance);
     }
     prepareForDraw();
+    mg_depth_sampling_guard depth_guard;
     GLES.glDrawArraysInstanced(mode, first, count, instancecount);
     CHECK_GL_ERROR
 }
@@ -552,4 +560,28 @@ void glDrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, G
             baseinstance);
     }
     glDrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount, basevertex);
+}
+
+
+// Keep these forwards on their original path: buffer-texture setup was not
+// previously run here. Only the depth sampler guard is new.
+NATIVE_FUNCTION_HEAD(void, glDrawArrays, GLenum mode, GLint first, GLsizei count)
+    mg_depth_sampling_guard depth_guard;
+    GLES.glDrawArrays(mode, first, count);
+    CHECK_GL_ERROR
+}
+NATIVE_FUNCTION_HEAD(void, glDrawArraysInstanced, GLenum mode, GLint first, GLsizei count, GLsizei instances)
+    mg_depth_sampling_guard depth_guard;
+    GLES.glDrawArraysInstanced(mode, first, count, instances);
+    CHECK_GL_ERROR
+}
+NATIVE_FUNCTION_HEAD(void, glDrawArraysIndirect, GLenum mode, const void* indirect)
+    mg_depth_sampling_guard depth_guard;
+    GLES.glDrawArraysIndirect(mode, indirect);
+    CHECK_GL_ERROR
+}
+NATIVE_FUNCTION_HEAD(void, glDrawElementsIndirect, GLenum mode, GLenum type, const void* indirect)
+    mg_depth_sampling_guard depth_guard;
+    GLES.glDrawElementsIndirect(mode, type, indirect);
+    CHECK_GL_ERROR
 }

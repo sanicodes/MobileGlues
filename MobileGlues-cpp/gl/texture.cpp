@@ -6,6 +6,8 @@
 // End of Source File Header
 
 #include "texture.h"
+#include "depth_sampling.h"
+#include "depth_filter.h"
 #include "../config/settings.h"
 #include "../egl/context.h"
 #include <mutex>
@@ -214,10 +216,13 @@ namespace {
 
 struct texture_group_state_t {
     std::vector<TextureObject*> objects;
+    ska::flat_hash_map<GLuint, std::vector<GLint>> depth_sampler_locations;
 };
 struct texture_ctx_state_t {
     std::array<TextureUnit, MAX_TEXTURE_IMAGE_UNITS> units;
     int current_unit = 0;
+    int depth_sampler_es_version = 0;
+    bool depth_sampler_border = false;
     // What this layer last handed to GLES.glBindTexture / GLES.glActiveTexture,
     // i.e. the driver's side of the same state `units` and `current_unit` describe
     // from the application's side. The two are not one table because they answer
@@ -2031,4 +2036,160 @@ void glPixelStoref(GLenum pname, GLfloat param) {
     // rounds this form to the nearest integer for those.
     glPixelStorei(pname, (GLint)lroundf(param));
     CHECK_GL_ERROR
+}
+
+
+// Reflect once per executable. Query the uniform's unit at draw time because
+// glUniform1i, glProgramUniform1i and array forms can all change it. Inactive
+// units (and cube/integer/shadow samplers) must never receive a depth override.
+void mg_depth_forget_program(GLuint program) {
+    g_tg->depth_sampler_locations.erase(program);
+}
+
+static const std::vector<GLint>& raw_depth_sampler_locations(GLuint program) {
+    auto& cache = g_tg->depth_sampler_locations;
+    auto found = cache.find(program);
+    if (found != cache.end()) return found->second;
+    std::vector<GLint> locations;
+    GLint linked = 0;
+    GLES.glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    if (!linked) return cache.emplace(program, std::move(locations)).first->second;
+    GLint count = 0, max_name = 0;
+    GLES.glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &count);
+    GLES.glGetProgramiv(program, GL_ACTIVE_UNIFORM_MAX_LENGTH, &max_name);
+    std::vector<GLchar> name(std::max(max_name, 1));
+    for (GLint index = 0; index < count; ++index) {
+        GLsizei length = 0;
+        GLint size = 0;
+        GLenum type = 0;
+        GLES.glGetActiveUniform(program, index, name.size(), &length, &size, &type, name.data());
+        if (type != GL_SAMPLER_2D) continue;
+        std::string base(name.data(), length);
+        if (size > 1 && base.size() >= 3 && base.compare(base.size() - 3, 3, "[0]") == 0)
+            base.resize(base.size() - 3);
+        for (GLint element = 0; element < size; ++element) {
+            const std::string element_name = size > 1 ? base + "[" + std::to_string(element) + "]" : base;
+            const GLint location = GLES.glGetUniformLocation(program, element_name.c_str());
+            if (location >= 0) locations.push_back(location);
+        }
+    }
+    return cache.emplace(program, std::move(locations)).first->second;
+}
+
+mg_depth_sampling_guard::mg_depth_sampling_guard() {
+    const GLuint program = gl_state->current_program;
+    if (!program || hardware->es_version < 300) return;
+    // Ordinary colour-only rendering needs no reflection or driver queries.
+    bool may_sample_depth = false;
+    for (int unit = 0; unit < MAX_TEXTURE_IMAGE_UNITS; ++unit) {
+        const TextureObject* tex = TextureUnits[unit].GetBindingSlot(TextureTarget::TEXTURE_2D).GetBoundObject();
+        if (tex && tex->texture && mg_is_sized_depth_format(tex->internal_format)) {
+            may_sample_depth = true;
+            break;
+        }
+    }
+    if (!may_sample_depth) return;
+    GLint saved_active = -1;
+    bool visited[MAX_TEXTURE_IMAGE_UNITS]{};
+    for (const GLint location : raw_depth_sampler_locations(program)) {
+        GLint unit = -1;
+        GLES.glGetUniformiv(program, location, &unit);
+        if (unit < 0 || unit >= MAX_TEXTURE_IMAGE_UNITS || visited[unit]) continue;
+        visited[unit] = true;
+        const TextureObject* tex = TextureUnits[unit].GetBindingSlot(TextureTarget::TEXTURE_2D).GetBoundObject();
+        if (!tex || !tex->texture || !mg_is_sized_depth_format(tex->internal_format)) continue;
+
+        // Verify the real binding before relying on the frontend's format.
+        // Internal emulation is allowed to borrow driver texture bindings.
+        if (saved_active < 0) GLES.glGetIntegerv(GL_ACTIVE_TEXTURE, &saved_active);
+        GLES.glActiveTexture(GL_TEXTURE0 + unit);
+        GLint actual_texture = 0;
+        GLES.glGetIntegerv(GL_TEXTURE_BINDING_2D, &actual_texture);
+        if ((GLuint)actual_texture != tex->texture) continue;
+        if (!g_tc->depth_sampler_es_version) {
+            GLint major = 0, minor = 0;
+            GLES.glGetIntegerv(GL_MAJOR_VERSION, &major);
+            GLES.glGetIntegerv(GL_MINOR_VERSION, &minor);
+            g_tc->depth_sampler_es_version = major * 100 + minor * 10;
+            g_tc->depth_sampler_border = g_tc->depth_sampler_es_version >= 320;
+            if (!g_tc->depth_sampler_border) {
+                GLint extensions = 0;
+                GLES.glGetIntegerv(GL_NUM_EXTENSIONS, &extensions);
+                for (GLint index = 0; index < extensions; ++index) {
+                    const char* name = (const char*)GLES.glGetStringi(GL_EXTENSIONS, index);
+                    if (name && (!std::strcmp(name, "GL_EXT_texture_border_clamp") ||
+                                 !std::strcmp(name, "GL_OES_texture_border_clamp")))
+                        g_tc->depth_sampler_border = true;
+                }
+            }
+        }
+        // GetTexLevelParameter is available from ES 3.1 onward.
+        if (g_tc->depth_sampler_es_version >= 310) {
+            GLint base_level = 0, actual_format = 0;
+            GLES.glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, &base_level);
+            GLES.glGetTexLevelParameteriv(GL_TEXTURE_2D, base_level, GL_TEXTURE_INTERNAL_FORMAT, &actual_format);
+            if (!mg_is_sized_depth_format(actual_format)) continue;
+        }
+
+        GLint sampler = 0, min_filter = 0, mag_filter = 0, compare = 0;
+        GLES.glGetIntegerv(GL_SAMPLER_BINDING, &sampler);
+        auto get_int = [&](GLenum pname, GLint* value) {
+            if (sampler) GLES.glGetSamplerParameteriv(sampler, pname, value);
+            else GLES.glGetTexParameteriv(GL_TEXTURE_2D, pname, value);
+        };
+        auto get_float = [&](GLenum pname, GLfloat* value) {
+            if (sampler) GLES.glGetSamplerParameterfv(sampler, pname, value);
+            else GLES.glGetTexParameterfv(GL_TEXTURE_2D, pname, value);
+        };
+        get_int(GL_TEXTURE_MIN_FILTER, &min_filter);
+        get_int(GL_TEXTURE_MAG_FILTER, &mag_filter);
+        get_int(GL_TEXTURE_COMPARE_MODE, &compare);
+        if (!mg_depth_pairing_incomplete(tex->internal_format, compare, min_filter, mag_filter)) continue;
+
+        GLuint copy = 0;
+        GLES.glGenSamplers(1, &copy);
+        if (!copy) continue;
+        // Copy the effective sampler, not the depth texture's defaults. LOD
+        // clamps and wrap/border state are essential to Minecraft's render
+        // targets. Neither the original sampler nor any texture is modified.
+        for (const GLenum pname : {GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TEXTURE_WRAP_R,
+                                   GL_TEXTURE_COMPARE_FUNC}) {
+            GLint value = 0;
+            get_int(pname, &value);
+            GLES.glSamplerParameteri(copy, pname, value);
+        }
+        for (const GLenum pname : {GL_TEXTURE_MIN_LOD, GL_TEXTURE_MAX_LOD}) {
+            GLfloat value = 0;
+            get_float(pname, &value);
+            GLES.glSamplerParameterf(copy, pname, value);
+        }
+        // Use capabilities of this context, not the initialization context.
+        if (g_tc->depth_sampler_border) {
+            GLfloat border[4]{};
+            get_float(GL_TEXTURE_BORDER_COLOR, border);
+            GLES.glSamplerParameterfv(copy, GL_TEXTURE_BORDER_COLOR, border);
+        }
+        GLES.glSamplerParameteri(copy, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+        GLES.glSamplerParameteri(copy, GL_TEXTURE_MIN_FILTER,
+                                mg_depth_filter_make_legal(GL_TEXTURE_MIN_FILTER, min_filter));
+        GLES.glSamplerParameteri(copy, GL_TEXTURE_MAG_FILTER,
+                                mg_depth_filter_make_legal(GL_TEXTURE_MAG_FILTER, mag_filter));
+        GLES.glBindSampler(unit, copy);
+        bindings[count++] = {(GLuint)unit, (GLuint)sampler, copy};
+        static thread_local bool announced = false;
+        if (!announced) {
+            LOG_I("Raw depth sampling: using a private nearest-filtered sampler (texture %u, unit %d)",
+                  tex->texture, unit)
+            announced = true;
+        }
+    }
+    if (saved_active >= 0) GLES.glActiveTexture(saved_active);
+}
+
+mg_depth_sampling_guard::~mg_depth_sampling_guard() {
+    for (int index = count - 1; index >= 0; --index) {
+        const Binding& binding = bindings[index];
+        GLES.glBindSampler(binding.unit, binding.original);
+        GLES.glDeleteSamplers(1, &binding.temporary);
+    }
 }

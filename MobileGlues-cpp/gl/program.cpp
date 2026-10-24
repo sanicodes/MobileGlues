@@ -11,6 +11,7 @@
 #include "log.h"
 #include "shader.h"
 #include "program.h"
+#include "depth_sampling.h"
 #include <regex>
 #include <cstring>
 #include <iostream>
@@ -150,6 +151,7 @@ void glLinkProgram(GLuint program) {
         }
     }
 
+    mg_depth_forget_program(program);
     GLES.glLinkProgram(program);
 
     CHECK_GL_ERROR
@@ -208,6 +210,7 @@ GLuint glCreateProgram() {
     LOG()
     LOG_D("glCreateProgram")
     GLuint program = GLES.glCreateProgram();
+    mg_depth_forget_program(program);
     if (hardware->emulate_texture_buffer) {
         program_map_is_sampler_buffer_emulated[program] = false;
         if (g_samplerCacheForSamplerBuffer.find(program) != g_samplerCacheForSamplerBuffer.end()) {
@@ -260,5 +263,17 @@ void glGetActiveUniformName(GLuint program, GLuint uniformIndex, GLsizei bufSize
     if (length) *length = written;
 
     LOG_D("  -> \"%s\"", uniformName)
+    CHECK_GL_ERROR
+}
+
+
+NATIVE_FUNCTION_HEAD(void, glProgramBinary, GLuint program, GLenum format, const void* binary, GLsizei length)
+    mg_depth_forget_program(program);
+    GLES.glProgramBinary(program, format, binary, length);
+    CHECK_GL_ERROR
+}
+NATIVE_FUNCTION_HEAD(void, glDeleteProgram, GLuint program)
+    mg_depth_forget_program(program);
+    GLES.glDeleteProgram(program);
     CHECK_GL_ERROR
 }

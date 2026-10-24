@@ -115,3 +115,29 @@ that the final APK exposes the launchable activity.
 
 Related upstream report:
 https://github.com/MobileGL-Dev/MobileGlues-release/issues/474
+
+
+## Fabulous raw-depth sampling (Sanicodes 5)
+
+The optional real-driver test links `texture.cpp`, `drawing.cpp`, native
+forwards, pixel transfer and the pure depth predicates. Shader compilation and
+framebuffer setup use the real GLES driver, bypassing unrelated shader/FBO
+translation. Sampler state is inspected inside the production draw forward.
+
+```sh
+MG_GLES_TEST_ANGLE_DIR="$ANDROID_SDK_ROOT/emulator/lib64/gles_angle" \
+VK_ICD_FILENAMES=/path/to/vk_swiftshader_icd.json \
+sh MobileGlues-cpp/tests/run-depth-gles.sh
+```
+
+With no ANGLE directory the test uses surfaceless system EGL. For Mesa software
+rendering set `LIBGL_ALWAYS_SOFTWARE=1` and select the Mesa EGL vendor if needed.
+The old emulator ANGLE build `5fa2e61da947` does not update sampler-array mappings
+correctly after a draw, including a direct driver draw with legal filters; that
+case is reported explicitly. The guard must match the legal driver reference,
+and Mesa must produce both expected numeric layer-composite results. No failure
+from a different ANGLE revision is suppressed.
+
+Device acceptance: confirm native build `2.0.0-sanicodes.5`, start in Fancy, then
+check Fabulous with clouds/water behind solid geometry. Check terrain, GUI/item
+textures, glass, particles and FPS. Host test success is not a phone test result.

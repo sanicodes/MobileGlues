@@ -1,4 +1,4 @@
-# MobileGlues (Sanicodes) 2.0.0-sanicodes.4
+# MobileGlues (Sanicodes) 2.0.0-sanicodes.5
 
 An ARM64 release of the Sanicodes fork with the Minecraft 26.3 shader fixes.
 The optimized native library uses CMake Release, ThinLTO and 16 KiB ELF page
@@ -7,27 +7,36 @@ disabled. The app manages its renderer settings directly, including ANGLE,
 error reporting, shader cache, extensions, OpenGL version, FSR 1, depth-clear
 workarounds, renderer identity and multi-draw preference orders.
 
-The user reports that startup and the follow-up rendering checks worked on the
-Xiaomi 2311DRK48G, Mali-G615, Android 16, Zalith 2.7.2 with ANGLE. This is a
-fork release; compatibility beyond that setup has not been established.
+Version 5 adds a replacement for the Fabulous depth-sampling fix. It inspects
+only active `sampler2D` inputs of the current program. A sized depth image with
+comparison disabled and filtering that makes it incomplete on GLES receives a
+private nearest-filtered sampler for that draw. The copy retains wrap, LOD,
+comparison-function and supported border settings. Original texture and sampler
+parameters stay unchanged; original bindings are restored and private objects
+are deleted when the draw returns. Colour, integer and shadow samplers are left
+on their existing paths. Program reflection is invalidated on creation, link,
+binary load and deletion; sampler unit assignments are read at each draw.
 
-Version 4 is a recovery release. Version 3 caused black terrain, item icons
-and menu backgrounds on the user's Mali/ANGLE device, including Fancy/Fast
-graphics. Its depth-filter experiment has been removed. All rendering sources
-under `gl/`, `gles/`, `egl/` and the native CMake configuration are restored to
-the release 2 commit `79c3295`. The standalone settings app and the startup
-shader translation fixes remain. Startup logging now prints the native build
-version and explicitly identifies the reverted renderer baseline.
+This does not restore version 3's global texture-filter rewrites, sampler
+unbinding fallback or new buffer-texture preparation on previously direct draw
+forwards. Version 3 was withdrawn after black terrain and GUI textures on the
+user's Mali/ANGLE device. Version 4 restored Fancy/Fast and remains the known
+working fallback. The startup shader fixes and independent settings app remain.
 
-The user confirmed that Fancy and Fast work again on version 4. Fabulous
-still draws clouds through opaque geometry, matching the release 2 issue.
-The Fabulous transparency issue remains unresolved; use Fancy/Fast for now. The version 3 predicate/state checks
-and isolated ANGLE readback test did not catch its full-game regression and
-must not be treated as Minecraft compatibility certification.
+Version 5 is a signed ARM64 Release build for manual device validation. Host
+checks cover real production texture/draw wrappers with ANGLE Vulkan/SwiftShader
+and Mesa GLES, depth readback, shared colour samplers, LOD/wrap preservation,
+texture-only sampling, multiple depth layers, active-unit/binding restoration,
+private-object cleanup, program relinking and shadow comparisons. The old host
+ANGLE build has a separate sampler-array remapping limitation that reproduces
+without MobileGlues; the test reports it explicitly and compares with the
+legal direct-driver reference. Mesa validates the updated mapping numerically.
+These checks do not establish Minecraft compatibility on Mali. Fabulous cloud
+and water occlusion, ordinary textures and frame rate still need the phone test.
 
 ## Install or update
 
-Install `build/releases/MobileGlues-2.0.0-sanicodes.4-arm64.apk` directly over
+Install `build/releases/MobileGlues-2.0.0-sanicodes.5-arm64.apk` directly over
 the earlier test plugin or Sanicodes release. No uninstall is required.
 
 1. Open **MobileGlues (Sanicodes)** and tap **Allow access**. On Android 11+
@@ -38,7 +47,9 @@ the earlier test plugin or Sanicodes release. No uninstall is required.
    cache and OpenGL 4.0. Unknown settings and existing draw orders survive saves.
 3. Make any changes and tap **Save settings**, or **Save and open Zalith**.
 4. Force-stop and reopen Zalith so its Minecraft process loads the new library.
-   Use **MobileGlues (Sanicodes, OpenGL 4.0)** and check Fancy/Fast graphics.
+   Use **MobileGlues (Sanicodes, OpenGL 4.0)**. Check Fancy first, then Fabulous:
+   clouds and water behind solid walls/roofs, stained glass, particles and item
+   icons. Reopen Minecraft after changing graphics modes if a result is unclear.
 
 The original MobileGlues app can now be uninstalled. ANGLE is supplied by the
 launcher, not the original plugin app. Shared settings stay in `/sdcard/MG`,
@@ -49,8 +60,9 @@ access that shared directory; it is not used to scan unrelated files.
 The release preserves the earlier plugin's Android application ID and signing
 certificate so Android accepts the update. The app label, renderer label and
 version use the release name. The official plugin remains a separate app.
-The native driver version is `2.0.0-sanicodes.4`. The new `MG/latest.log` starts
-with `[MobileGlues] Build: 2.0.0-sanicodes.4`.
+The native driver version is `2.0.0-sanicodes.5`. The new `MG/latest.log` starts
+with `[MobileGlues] Build: 2.0.0-sanicodes.5`. The first affected draw logs
+`Raw depth sampling: using a private nearest-filtered sampler`.
 
 Cache clearing removes only the shader cache and its pending write, and asks
 that Minecraft be closed first. Restoring defaults keeps the previous settings
@@ -104,7 +116,7 @@ The release also updates the previous signed APK in place.
 
 ```sh
 ANDROID_SDK_ROOT=/path/to/sdk bash MobileGlues-cpp/tests/android/run.sh \
-  emulator-5580 build/releases/MobileGlues-2.0.0-sanicodes.4-arm64.apk
+  emulator-5580 build/releases/MobileGlues-2.0.0-sanicodes.5-arm64.apk
 ```
 
 Use a disposable emulator. The runner refuses physical-device serials and

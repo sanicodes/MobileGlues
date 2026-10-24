@@ -29,10 +29,18 @@ translation, including exception paths.
 
 ## Manual test on the phone
 
-The APK is `build/test-plugin/MobileGlues-mc26.3-test-arm64.apk`. It has package
+The APK is `build/test-plugin/MobileGlues-mc26.3-test2-arm64.apk`. It has package
 name `com.fcl.plugin.mobileglues.mc26test` and a local test signature. It installs
-alongside the official MobileGlues plugin and contains only the ARM64 renderer
-library and plugin metadata; it has no settings screen or launcher activity.
+alongside the official MobileGlues plugin and contains the ARM64 renderer
+library, plugin metadata and a small informational launcher activity.
+Test 2 updates test 1 in place using the same package and signing key.
+The original test 1 APK lacked a MAIN activity and was invisible to Zalith's
+plugin discovery; use test 2 instead.
+An Android 16 emulator reproduced that difference using the same
+`queryIntentActivities(ACTION_MAIN, GET_META_DATA | GET_SHARED_LIBRARY_FILES)`
+call as Zalith: test 1 returned zero matching plugins, while updating it to
+test 2 returned one, with the expected renderer metadata and the native
+library extracted successfully. The update used the existing signing key.
 
 1. Install the test APK and fully restart Zalith Launcher.
 2. In the isolated vanilla 26.3 instance, select
@@ -96,9 +104,11 @@ manifest. The locally generated signing key stays under the ignored `build/`
 directory. It is a development key with the conventional password `android`.
 No official signing key is used.
 
-Zalith's renderer discovery reads the `fclPlugin`, `renderer`, `des` and
-`pojavEnv` metadata from installed applications; it does not require the
-official package name. The test APK uses that same metadata protocol.
+Zalith's plugin loader first calls `queryIntentActivities(Intent(ACTION_MAIN))`.
+It then reads the `fclPlugin`, `renderer`, `des` and `pojavEnv` metadata from
+those applications; it does not require the official package name. The test
+APK provides both a MAIN activity and the renderer metadata. Packaging checks
+that the final APK exposes the launchable activity.
 
 Related upstream report:
 https://github.com/MobileGL-Dev/MobileGlues-release/issues/474

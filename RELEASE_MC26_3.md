@@ -19,8 +19,9 @@ the release 2 commit `79c3295`. The standalone settings app and the startup
 shader translation fixes remain. Startup logging now prints the native build
 version and explicitly identifies the reverted renderer baseline.
 
-The Fabulous transparency issue remains unresolved. Use Fancy/Fast while
-confirming normal rendering is restored. The version 3 predicate/state checks
+The user confirmed that Fancy and Fast work again on version 4. Fabulous
+still draws clouds through opaque geometry, matching the release 2 issue.
+The Fabulous transparency issue remains unresolved; use Fancy/Fast for now. The version 3 predicate/state checks
 and isolated ANGLE readback test did not catch its full-game regression and
 must not be treated as Minecraft compatibility certification.
 

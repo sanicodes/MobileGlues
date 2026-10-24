@@ -141,3 +141,13 @@ from a different ANGLE revision is suppressed.
 Device acceptance: confirm native build `2.0.0-sanicodes.5`, start in Fancy, then
 check Fabulous with clouds/water behind solid geometry. Check terrain, GUI/item
 textures, glass, particles and FPS. Host test success is not a phone test result.
+
+
+## Fresh-sampler default writes (v8)
+
+`tests/depth_sampling_gles_test.cpp` compares effective source/private state and
+checks defaults, non-defaults and return-to-default values. Sampler deletion is
+still required after every affected draw. The optional benchmark flags are
+`MG_DEPTH_BENCH_ITERATIONS`, `MG_DEPTH_BENCH_DRAW_ITERATIONS`, and
+`MG_DEPTH_BENCH_ONLY`; benchmark-only mode does not run the full regression set.
+See [PERFORMANCE_MC26_3_V8.md](PERFORMANCE_MC26_3_V8.md) for controls and results.

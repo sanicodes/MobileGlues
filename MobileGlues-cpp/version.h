@@ -31,7 +31,7 @@
 #define VERSION_DEV_NUMBER 4
 #endif
 
-#define VERSION_SUFFIX "-sanicodes.5"
+#define VERSION_SUFFIX "-sanicodes.8"
 
 #define MOBILEGLUES_VERSION_H
 

@@ -2151,25 +2151,34 @@ mg_depth_sampling_guard::mg_depth_sampling_guard() {
         if (!copy) continue;
         // Copy the effective sampler, not the depth texture's defaults. LOD
         // clamps and wrap/border state are essential to Minecraft's render
-        // targets. Neither the original sampler nor any texture is modified.
+        // targets. Fresh defaults follow the Khronos glSamplerParameter reference:
+        // https://registry.khronos.org/OpenGL-Refpages/es3.0/html/glSamplerParameter.xhtml
+        // Neither the original sampler nor any texture is modified.
         for (const GLenum pname : {GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TEXTURE_WRAP_R,
                                    GL_TEXTURE_COMPARE_FUNC}) {
             GLint value = 0;
             get_int(pname, &value);
-            GLES.glSamplerParameteri(copy, pname, value);
+            // A fresh sampler already has these values. Keep the exact v5
+            // state while avoiding redundant writes; never retain the object.
+            const GLint initial = pname == GL_TEXTURE_COMPARE_FUNC ? GL_LEQUAL : GL_REPEAT;
+            if (value != initial) GLES.glSamplerParameteri(copy, pname, value);
         }
         for (const GLenum pname : {GL_TEXTURE_MIN_LOD, GL_TEXTURE_MAX_LOD}) {
             GLfloat value = 0;
             get_float(pname, &value);
-            GLES.glSamplerParameterf(copy, pname, value);
+            const GLfloat initial = pname == GL_TEXTURE_MIN_LOD ? -1000.0f : 1000.0f;
+            if (value != initial) GLES.glSamplerParameterf(copy, pname, value);
         }
         // Use capabilities of this context, not the initialization context.
         if (g_tc->depth_sampler_border) {
             GLfloat border[4]{};
             get_float(GL_TEXTURE_BORDER_COLOR, border);
-            GLES.glSamplerParameterfv(copy, GL_TEXTURE_BORDER_COLOR, border);
+            constexpr GLfloat initial_border[4]{};
+            // Compare bits so a non-default signed zero is still copied.
+            if (std::memcmp(border, initial_border, sizeof(border)))
+                GLES.glSamplerParameterfv(copy, GL_TEXTURE_BORDER_COLOR, border);
         }
-        GLES.glSamplerParameteri(copy, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+        // GL_NONE is the fresh sampler's compare-mode default.
         GLES.glSamplerParameteri(copy, GL_TEXTURE_MIN_FILTER,
                                 mg_depth_filter_make_legal(GL_TEXTURE_MIN_FILTER, min_filter));
         GLES.glSamplerParameteri(copy, GL_TEXTURE_MAG_FILTER,

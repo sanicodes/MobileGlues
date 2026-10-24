@@ -13,6 +13,9 @@
 #include <cstdlib>
 #include <dlfcn.h>
 #include <string>
+#include <chrono>
+#include <algorithm>
+#include <array>
 
 UnorderedMap<GLuint, bool> program_map_is_sampler_buffer_emulated;
 thread_local MGContext* g_current_ctx = nullptr;
@@ -44,6 +47,30 @@ static void check(bool okay, const char* label) {
     ++checks;
     if (!okay) { std::printf("FAIL: %s\n", label); ++failures; }
 }
+static void check_effective_state(GLuint bound) {
+    for (const GLenum pname : {GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TEXTURE_WRAP_R,
+                               GL_TEXTURE_COMPARE_MODE, GL_TEXTURE_COMPARE_FUNC}) {
+        GLint original = 0, copied = 0;
+        if (app_sampler) GLES.glGetSamplerParameteriv(app_sampler, pname, &original);
+        else GLES.glGetTexParameteriv(GL_TEXTURE_2D, pname, &original);
+        GLES.glGetSamplerParameteriv(bound, pname, &copied);
+        check(original == copied, "private integer state equals effective application state");
+    }
+    for (const GLenum pname : {GL_TEXTURE_MIN_LOD, GL_TEXTURE_MAX_LOD}) {
+        GLfloat original = 0, copied = 0;
+        if (app_sampler) GLES.glGetSamplerParameterfv(app_sampler, pname, &original);
+        else GLES.glGetTexParameterfv(GL_TEXTURE_2D, pname, &original);
+        GLES.glGetSamplerParameterfv(bound, pname, &copied);
+        check(original == copied, "private LOD state equals effective application state");
+    }
+    if (hardware->es_version >= 320) {
+        GLfloat original[4]{}, copied[4]{};
+        if (app_sampler) GLES.glGetSamplerParameterfv(app_sampler, GL_TEXTURE_BORDER_COLOR, original);
+        else GLES.glGetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, original);
+        GLES.glGetSamplerParameterfv(bound, GL_TEXTURE_BORDER_COLOR, copied);
+        check(std::memcmp(original, copied, sizeof(original)) == 0, "private border state equals effective application state bit-for-bit");
+    }
+}
 static void observed_draw(GLenum mode, GLint first, GLsizei count) {
     GLint active = 0, bound = 0;
     GLES.glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
@@ -68,6 +95,7 @@ static void observed_draw(GLenum mode, GLint first, GLsizei count) {
         check(lod == -2.0f, "private sampler preserves min LOD");
         GLES.glGetSamplerParameterfv(bound, GL_TEXTURE_MAX_LOD, &lod);
         check(lod == 0.25f, "private sampler preserves max LOD");
+        check_effective_state(bound);
         if (app_sampler) {
             GLES.glGetSamplerParameteriv(app_sampler, GL_TEXTURE_MIN_FILTER, &value);
             check(value == GL_NEAREST_MIPMAP_LINEAR, "shared application sampler is unchanged");
@@ -134,7 +162,7 @@ int main() {
     DRIVER(glBindTexture); DRIVER(glTexStorage2D); DRIVER(glTexParameteri);
     DRIVER(glGenSamplers); DRIVER(glDeleteSamplers); DRIVER(glIsSampler);
     DRIVER(glSamplerParameteri); DRIVER(glSamplerParameterf); DRIVER(glBindSampler);
-    DRIVER(glGetStringi); DRIVER(glGetActiveUniform); DRIVER(glGetUniformiv); DRIVER(glGetIntegeri_v);
+    DRIVER(glFinish); DRIVER(glGetStringi); DRIVER(glGetActiveUniform); DRIVER(glGetUniformiv); DRIVER(glGetIntegeri_v);
     DRIVER(glGetSamplerParameteriv); DRIVER(glGetSamplerParameterfv);
     DRIVER(glGetTexLevelParameteriv); DRIVER(glGetTexParameterfv); DRIVER(glSamplerParameterfv);
     DRIVER(glTexParameterf); DRIVER(glTexImage2D); DRIVER(glGetTexParameteriv); DRIVER(glPixelStorei);
@@ -202,6 +230,105 @@ int main() {
     std::printf("Raw depth 0.75: incomplete pairing sampled %u; corrected pairing sampled %u (expected 191/192).\n",
                 pixels[0][0], pixels[1][0]);
     check(last_private_sampler && !GLES.glIsSampler(last_private_sampler), "private sampler is deleted after draw");
+    if (const char* iterations_env = std::getenv("MG_DEPTH_BENCH_ITERATIONS")) {
+        const int iterations = std::max(1, std::atoi(iterations_env));
+        GLES.glSamplerParameteri(sampler, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+        GLES.glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        GLES.glSamplerParameterf(sampler, GL_TEXTURE_MIN_LOD, -1000.0f);
+        GLES.glSamplerParameterf(sampler, GL_TEXTURE_MAX_LOD, 0.0f);
+        struct Counters { long generated = 0, deleted = 0, writes = 0; };
+        static Counters metrics;
+        static auto gen = GLES.glGenSamplers;
+        static auto del = GLES.glDeleteSamplers;
+        static auto param_i = GLES.glSamplerParameteri;
+        static auto param_f = GLES.glSamplerParameterf;
+        static auto param_fv = GLES.glSamplerParameterfv;
+        GLES.glGenSamplers = [](GLsizei n, GLuint* names) { metrics.generated += n; gen(n, names); };
+        GLES.glDeleteSamplers = [](GLsizei n, const GLuint* names) { metrics.deleted += n; del(n, names); };
+        GLES.glSamplerParameteri = [](GLuint n, GLenum p, GLint v) { ++metrics.writes; param_i(n, p, v); };
+        GLES.glSamplerParameterf = [](GLuint n, GLenum p, GLfloat v) { ++metrics.writes; param_f(n, p, v); };
+        GLES.glSamplerParameterfv = [](GLuint n, GLenum p, const GLfloat* v) { ++metrics.writes; param_fv(n, p, v); };
+        std::array<double, 5> timings{};
+        for (auto& timing : timings) {
+            const auto begin = std::chrono::steady_clock::now();
+            for (int i = 0; i < iterations; ++i) { mg_depth_sampling_guard guard; }
+            timing = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count() / iterations;
+        }
+        std::sort(timings.begin(), timings.end());
+        std::printf("BENCH guard-only: %.3f us/guard median, %d iterations x 5; generated=%ld deleted=%ld sampler-writes=%ld\n",
+                    timings[2], iterations, metrics.generated, metrics.deleted, metrics.writes);
+        check(metrics.generated == long(iterations) * 5 && metrics.deleted == long(iterations) * 5,
+              "benchmark preserves one fresh allocation/deletion per affected draw");
+        if (const char* draws_env = std::getenv("MG_DEPTH_BENCH_DRAW_ITERATIONS")) {
+            const int draws = std::max(1, std::atoi(draws_env));
+            const auto observer = GLES.glDrawArrays;
+            GLES.glDrawArrays = real_draw;
+            metrics = {};
+            for (auto& timing : timings) {
+                GLES.glFinish();
+                const auto begin = std::chrono::steady_clock::now();
+                for (int i = 0; i < draws; ++i) ::glDrawArrays(GL_TRIANGLES, 0, 3);
+                GLES.glFinish();
+                timing = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count() / draws;
+            }
+            std::sort(timings.begin(), timings.end());
+            std::printf("BENCH 4x4 draw+finish: %.3f us/draw median, %d iterations x 5; generated=%ld deleted=%ld sampler-writes=%ld\n",
+                        timings[2], draws, metrics.generated, metrics.deleted, metrics.writes);
+            GLES.glDrawArrays = observer;
+        }
+        GLES.glGenSamplers = gen; GLES.glDeleteSamplers = del;
+        GLES.glSamplerParameteri = param_i; GLES.glSamplerParameterf = param_f; GLES.glSamplerParameterfv = param_fv;
+        GLES.glSamplerParameteri(sampler, GL_TEXTURE_COMPARE_FUNC, GL_GREATER);
+        GLES.glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+        GLES.glSamplerParameterf(sampler, GL_TEXTURE_MIN_LOD, -2.0f);
+        GLES.glSamplerParameterf(sampler, GL_TEXTURE_MAX_LOD, 0.25f);
+        if (std::getenv("MG_DEPTH_BENCH_ONLY")) {
+            // This mode also runs with the v5 texture.cpp for an identical
+            // before/after harness; it does not certify the full regression set.
+            const GLenum error = glGetError();
+            std::printf("BENCH_ONLY mode; GL error %u\n", error);
+            return (error || std::abs(int(pixels[1][0]) - 191) > 1) ? 1 : 0;
+        }
+    }
+    // Compare the full state inside the real draw forward while switching
+    // defaults -> non-defaults -> defaults. Every copy still dies after the draw.
+    const auto fixture_observer = GLES.glDrawArrays;
+    GLES.glDrawArrays = [](GLenum mode, GLint first, GLsizei count) {
+        GLint bound = 0; GLES.glGetIntegerv(GL_SAMPLER_BINDING, &bound);
+        check(bound && (GLuint)bound != app_sampler, "state matrix uses a private sampler");
+        last_private_sampler = bound;
+        check_effective_state(bound);
+        real_draw(mode, first, count);
+    };
+    for (int variant = 0; variant < 4; ++variant) {
+        const bool non_default = variant == 1;
+        GLES.glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, non_default ? GL_CLAMP_TO_EDGE : GL_REPEAT);
+        GLES.glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, non_default ? GL_MIRRORED_REPEAT : GL_REPEAT);
+        GLES.glSamplerParameteri(sampler, GL_TEXTURE_WRAP_R, non_default ? GL_MIRRORED_REPEAT : GL_REPEAT);
+        GLES.glSamplerParameteri(sampler, GL_TEXTURE_COMPARE_FUNC, non_default ? GL_NEVER : GL_LEQUAL);
+        GLES.glSamplerParameterf(sampler, GL_TEXTURE_MIN_LOD, non_default ? -4.0f : -1000.0f);
+        GLES.glSamplerParameterf(sampler, GL_TEXTURE_MAX_LOD, non_default ? 4.0f : 1000.0f);
+        if (hardware->es_version >= 320) {
+            const GLfloat border[] = {variant == 3 ? -0.0f : (non_default ? 0.125f : 0.0f),
+                                       non_default ? 0.25f : 0.0f, non_default ? 0.375f : 0.0f,
+                                       non_default ? 0.5f : 0.0f};
+            GLES.glSamplerParameterfv(sampler, GL_TEXTURE_BORDER_COLOR, border);
+        }
+        ::glDrawArrays(GL_TRIANGLES, 0, 3);
+        unsigned char pixel[4]{}; glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+        check(std::abs(int(pixel[0]) - 191) <= 1, "state matrix preserves depth readback");
+        check(!GLES.glIsSampler(last_private_sampler), "state matrix preserves per-draw deletion");
+    }
+    GLES.glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    GLES.glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+    GLES.glSamplerParameteri(sampler, GL_TEXTURE_COMPARE_FUNC, GL_GREATER);
+    GLES.glSamplerParameterf(sampler, GL_TEXTURE_MIN_LOD, -2.0f);
+    GLES.glSamplerParameterf(sampler, GL_TEXTURE_MAX_LOD, 0.25f);
+    if (hardware->es_version >= 320) {
+        const GLfloat border[4]{};
+        GLES.glSamplerParameterfv(sampler, GL_TEXTURE_BORDER_COLOR, border);
+    }
+    GLES.glDrawArrays = fixture_observer;
     GLuint colour_texture;
     glGenTextures(1, &colour_texture);
     ::glActiveTexture(GL_TEXTURE1);

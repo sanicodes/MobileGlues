@@ -2,7 +2,9 @@
 
 This branch addresses the two shader errors in the Xiaomi 2311DRK48G / Mali-G615
 launch log, using upstream commit `97558a69157b033b890958b1e49258c5b51a80c6`.
-Device validation is still pending.
+The user reports that startup and the follow-up rendering checks passed on
+that Mali/ANGLE setup. The packaged release is documented in
+[RELEASE_MC26_3.md](RELEASE_MC26_3.md).
 
 Validated locally: the unpatched translator fails five regression cases; this
 branch passes those cases, all 81 selected Minecraft fragment shader variants,

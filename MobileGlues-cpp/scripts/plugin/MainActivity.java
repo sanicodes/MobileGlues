@@ -2,6 +2,8 @@
 package com.fcl.plugin.mobileglues.mc26test;
 
 import android.app.Activity;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.widget.TextView;
 
@@ -14,9 +16,18 @@ public final class MainActivity extends Activity {
         int padding = (int) (24 * getResources().getDisplayMetrics().density);
         message.setPadding(padding, padding, padding, padding);
         message.setTextSize(18);
-        message.setText("MobileGlues MC26.3 test\n\n"
+        String title = getApplicationInfo().loadLabel(getPackageManager()).toString();
+        String renderer = title;
+        try {
+            ApplicationInfo info = getPackageManager().getApplicationInfo(
+                    getPackageName(), PackageManager.GET_META_DATA);
+            renderer = info.metaData.getString("des", title);
+            title += "\n" + getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (PackageManager.NameNotFoundException ignored) {
+        }
+        message.setText(title + "\n\n"
                 + "Restart Zalith Launcher, then select:\n\n"
-                + "MobileGlues MC26.3 shader fix (test)\n\n"
+                + renderer + "\n\n"
                 + "Configure ANGLE using the official MobileGlues app.");
         setContentView(message);
     }

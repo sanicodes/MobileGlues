@@ -15,9 +15,9 @@ if [[ ${MOBILEGLUES_CHANNEL:-release} == test ]]; then
 else
     app_name='MobileGlues (Sanicodes)'
     description='MobileGlues (Sanicodes, OpenGL 4.0)'
-    version_name='2.0.0-sanicodes.3'
-    version_code=200003
-    default_output="$root/build/releases/MobileGlues-2.0.0-sanicodes.3-arm64.apk"
+    version_name='2.0.0-sanicodes.4'
+    version_code=200004
+    default_output="$root/build/releases/MobileGlues-2.0.0-sanicodes.4-arm64.apk"
 fi
 output=${2:-$default_output}
 mkdir -p "$(dirname "$output")"

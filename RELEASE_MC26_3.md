@@ -1,4 +1,4 @@
-# MobileGlues (Sanicodes) 2.0.0-sanicodes.3
+# MobileGlues (Sanicodes) 2.0.0-sanicodes.4
 
 An ARM64 release of the Sanicodes fork with the Minecraft 26.3 shader fixes.
 The optimized native library uses CMake Release, ThinLTO and 16 KiB ELF page
@@ -11,30 +11,22 @@ The user reports that startup and the follow-up rendering checks worked on the
 Xiaomi 2311DRK48G, Mali-G615, Android 16, Zalith 2.7.2 with ANGLE. This is a
 fork release; compatibility beyond that setup has not been established.
 
-Version 3 addresses depth sampling in Fabulous / improved transparency mode,
-where water and clouds could appear over solid terrain. The depth-texture
-filter correction comes from HEBEI77's proposed upstream
-[PR #61](https://github.com/MobileGL-Dev/MobileGlues/pull/61), retained with its
-original commit authorship. Additional fixes keep nested draw guards from
-restoring sampler bindings too early, restore the correct active texture unit,
-and avoid recording sampler bindings the driver rejected. Unknown texture
-targets are also handled safely by the newly intercepted parameter queries.
+Version 4 is a recovery release. Version 3 caused black terrain, item icons
+and menu backgrounds on the user's Mali/ANGLE device, including Fancy/Fast
+graphics. Its depth-filter experiment has been removed. All rendering sources
+under `gl/`, `gles/`, `egl/` and the native CMake configuration are restored to
+the release 2 commit `79c3295`. The standalone settings app and the startup
+shader translation fixes remain. Startup logging now prints the native build
+version and explicitly identifies the reverted renderer baseline.
 
-The correction applies to sized 2D depth/depth-stencil textures. Colour units
-sharing the same sampler keep their filtering. Shadow comparison filtering is
-preserved. Depth arrays and cube-map sampling are outside this correction.
-
-Validation for this change: 31 filter-decision checks, 20 tests of the actual
-texture/sampler wrappers with a driver model, the existing pixel/framebuffer
-tests, 81 Minecraft fragment shader variants, and a Release ARM64 build pass.
-On ANGLE/Vulkan/SwiftShader, the GLES test reproduced a stored depth of 0.75
-sampling as zero through the original filter pairing; the corrected pairing
-returned 191/255 with no GL error. Fabulous rendering on the user's Mali phone
-still needs a visual retest of the version 3 APK.
+The Fabulous transparency issue remains unresolved. Use Fancy/Fast while
+confirming normal rendering is restored. The version 3 predicate/state checks
+and isolated ANGLE readback test did not catch its full-game regression and
+must not be treated as Minecraft compatibility certification.
 
 ## Install or update
 
-Install `build/releases/MobileGlues-2.0.0-sanicodes.3-arm64.apk` directly over
+Install `build/releases/MobileGlues-2.0.0-sanicodes.4-arm64.apk` directly over
 the earlier test plugin or Sanicodes release. No uninstall is required.
 
 1. Open **MobileGlues (Sanicodes)** and tap **Allow access**. On Android 11+
@@ -44,7 +36,8 @@ the earlier test plugin or Sanicodes release. No uninstall is required.
    A fresh install creates defaults: prefer ANGLE, report errors, 32 MiB shader
    cache and OpenGL 4.0. Unknown settings and existing draw orders survive saves.
 3. Make any changes and tap **Save settings**, or **Save and open Zalith**.
-4. Restart Minecraft using **MobileGlues (Sanicodes, OpenGL 4.0)** in Zalith.
+4. Force-stop and reopen Zalith so its Minecraft process loads the new library.
+   Use **MobileGlues (Sanicodes, OpenGL 4.0)** and check Fancy/Fast graphics.
 
 The original MobileGlues app can now be uninstalled. ANGLE is supplied by the
 launcher, not the original plugin app. Shared settings stay in `/sdcard/MG`,
@@ -55,7 +48,8 @@ access that shared directory; it is not used to scan unrelated files.
 The release preserves the earlier plugin's Android application ID and signing
 certificate so Android accepts the update. The app label, renderer label and
 version use the release name. The official plugin remains a separate app.
-The native driver version is `2.0.0-sanicodes.3`.
+The native driver version is `2.0.0-sanicodes.4`. The new `MG/latest.log` starts
+with `[MobileGlues] Build: 2.0.0-sanicodes.4`.
 
 Cache clearing removes only the shader cache and its pending write, and asks
 that Minecraft be closed first. Restoring defaults keeps the previous settings
@@ -100,8 +94,8 @@ test packaging instructions. Normal releases use `package-plugin.sh`.
 
 ## Android settings checks
 
-On an Android 16 emulator without the original MobileGlues app installed,
-29 checks passed against the installed release APK: the permission gate,
+The unchanged settings UI passed 29 checks in release 2 on an Android 16
+emulator without the original MobileGlues app installed: the permission gate,
 defaults, persistence, native numeric values, preservation of unknown keys and
 draw orders, invalid input, corrupt-file recovery, failed writes, cache
 clearing, actual screen save/load and unsaved edits across activity recreation.
@@ -109,24 +103,9 @@ The release also updates the previous signed APK in place.
 
 ```sh
 ANDROID_SDK_ROOT=/path/to/sdk bash MobileGlues-cpp/tests/android/run.sh \
-  emulator-5580 build/releases/MobileGlues-2.0.0-sanicodes.3-arm64.apk
+  emulator-5580 build/releases/MobileGlues-2.0.0-sanicodes.4-arm64.apk
 ```
 
 Use a disposable emulator. The runner refuses physical-device serials and
 restores the shared configuration after its screen checks. Its instrumentation
 APK uses the local release signing identity and is not included in the release.
-
-## Optional depth-sampling GLES check (Linux)
-
-```sh
-g++ -std=gnu++20 -I MobileGlues-cpp -I MobileGlues-cpp/include \
-  MobileGlues-cpp/tests/depth_filter_gles_test.cpp \
-  MobileGlues-cpp/gl/depth_filter.cpp -ldl -o /tmp/mg_depth_filter_gles_test
-MG_GLES_TEST_ANGLE_DIR="$ANDROID_SDK_ROOT/emulator/lib64/gles_angle" \
-  VK_ICD_FILENAMES=/path/to/vk_swiftshader_icd.json /tmp/mg_depth_filter_gles_test
-```
-
-Without `MG_GLES_TEST_ANGLE_DIR`, it uses the system surfaceless EGL/GLES driver.
-Some desktop drivers permit the original filter pairing, so only the explicit
-ANGLE mode requires the original sample to be zero. Both modes require the
-corrected sample to match the stored depth and the draw to return no GL error.

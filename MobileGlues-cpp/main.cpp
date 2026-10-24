@@ -15,6 +15,7 @@
 #include "gl/mg.h"
 #include "gles/loader.h"
 #include "includes.h"
+#include "version.h"
 #include <cerrno>
 #include <cstring>
 #include <sys/stat.h>
@@ -60,6 +61,8 @@ void proc_init() {
     start_log();
 
     LOG_V("Initializing %s ...", RENDERERNAME);
+    LOG_V("[MobileGlues] Build: %d.%d.%d%s", MAJOR, MINOR, REVISION, VERSION_SUFFIX);
+    LOG_V("[MobileGlues] Renderer: release 2 baseline; version 3 depth-filter changes reverted.");
     show_license();
 
     init_settings();

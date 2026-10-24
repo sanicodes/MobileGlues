@@ -250,6 +250,9 @@ struct texture_ctx_state_t {
     // texture bindings above; zero is GL's default of no sampler, which is
     // what a value-initialised array answers.
     std::array<GLuint, MAX_TEXTURE_IMAGE_UNITS> sampler_bindings{};
+    // Backends can call other draw wrappers. Only the outermost guard may
+    // restore the application's sampler bindings.
+    int depth_draw_nesting = 0;
     // Which share group this context draws its texture objects from. Deleting an
     // object has to clear it out of every context in that group, not only the one
     // that happened to issue the glDeleteTextures.
@@ -493,8 +496,10 @@ bool mg_driver_texture_binding(GLenum target, GLuint* out) {
 }
 
 TextureObject* mgGetTexObjectByTarget(GLenum target) {
+    const TextureTarget converted = ConvertGLEnumToTextureTarget(target);
+    if (converted == TextureTarget::UNKNWON) return nullptr;
     return GetTextureUnit(GetCurrentTextureUnitIndex())
-        .GetBindingSlot(ConvertGLEnumToTextureTarget(target))
+        .GetBindingSlot(converted)
         .GetBoundObject();
 }
 
@@ -879,7 +884,7 @@ static void push_depth_sampling_state(GLenum target, const TextureObject& tex) {
 // a pairing may keep, and the driver's value stays the application's
 // value. A value the driver rejects stays rejected here too.
 static void record_sampler_sampling_param(GLuint sampler, GLenum pname, GLint param) {
-    if (sampler == 0 || !mg_filter_value_legal(pname, param)) return;
+    if (sampler == 0 || !mg_filter_value_legal(pname, param) || !GLES.glIsSampler(sampler)) return;
     if (sampler >= SamplerShadowTable.size()) SamplerShadowTable.resize(sampler + 1);
     sampler_shadow_t& s = SamplerShadowTable[sampler];
     switch (pname) {
@@ -1968,6 +1973,10 @@ void glGetTexParameterfv(GLenum target, GLenum pname, GLfloat* params) {
 void glDeleteSamplers(GLsizei count, const GLuint* samplers) {
     LOG()
     LOG_D("glDeleteSamplers, count: %d", count)
+    if (count < 0) {
+        GLES.glDeleteSamplers(count, samplers);
+        return;
+    }
     if (samplers) {
         for (GLsizei i = 0; i < count; ++i) {
             const GLuint id = samplers[i];
@@ -1986,8 +1995,9 @@ void glDeleteSamplers(GLsizei count, const GLuint* samplers) {
 void glBindSampler(GLuint unit, GLuint sampler) {
     LOG()
     LOG_D("glBindSampler, unit: %d, sampler: %u", unit, sampler)
-    if (unit < (GLuint)mg_max_texture_units()) SamplerBindings[unit] = sampler;
     GLES.glBindSampler(unit, sampler);
+    if (unit < (GLuint)mg_max_texture_units() && (sampler == 0 || GLES.glIsSampler(sampler)))
+        SamplerBindings[unit] = sampler;
     CHECK_GL_ERROR
 }
 
@@ -2031,6 +2041,8 @@ void glSamplerParameterfv(GLuint sampler, GLenum pname, const GLfloat* param) {
 // offending unit(s) hands the draw the texture object's already-legal
 // state; colour units sharing that sampler are not touched.
 mg_depth_draw_guard::mg_depth_draw_guard() {
+    nesting_count = &g_tc->depth_draw_nesting;
+    if ((*nesting_count)++ != 0) return;
     const int max_units = mg_max_texture_units();
     int original_active = -1;
     for (int unit = 0; unit < max_units; ++unit) {
@@ -2067,7 +2079,7 @@ mg_depth_draw_guard::mg_depth_draw_guard() {
             // push NONE for the draw; the record restores it after.
             rec.saved_compare = (GLint)tex->compare_mode;
             if (original_active < 0) original_active = mg_driver_active_texture_unit();
-            if (original_active != unit) GLES.glActiveTexture(GL_TEXTURE0 + unit);
+            GLES.glActiveTexture(GL_TEXTURE0 + unit);
             GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
                                  mg_depth_filter_make_legal(GL_TEXTURE_MIN_FILTER, tex->min_filter));
             GLES.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
@@ -2081,6 +2093,7 @@ mg_depth_draw_guard::mg_depth_draw_guard() {
 }
 
 mg_depth_draw_guard::~mg_depth_draw_guard() {
+    if (nesting_count && --(*nesting_count) != 0) return;
     if (moved_count == 0) return;
     int original_active = -1;
     for (int i = 0; i < moved_count; ++i) {
@@ -2090,7 +2103,7 @@ mg_depth_draw_guard::~mg_depth_draw_guard() {
         TextureObject* tex = TextureUnits[rec.unit].GetBindingSlot(TextureTarget::TEXTURE_2D).GetBoundObject();
         if (!tex) continue; // Binding gone; there is no compare mode to put back.
         if (original_active < 0) original_active = mg_driver_active_texture_unit();
-        if (original_active != rec.unit) GLES.glActiveTexture(GL_TEXTURE0 + rec.unit);
+        GLES.glActiveTexture(GL_TEXTURE0 + rec.unit);
         // Re-derived from the record: comparison back on, filters back to
         // what a compare-enabled pairing may carry, which is the exact
         // state push_depth_sampling_state put on the driver before the

@@ -155,8 +155,9 @@ struct mg_depth_draw_guard {
         // otherwise its GL_TEXTURE_COMPARE_MODE, restored on destruction.
         int saved_compare;
     };
-    Moved moved[kMaxUnits] = {};
+    Moved moved[kMaxUnits]; // Only entries below moved_count are ever read.
     int moved_count = 0;
+    int* nesting_count = nullptr;
 
     mg_depth_draw_guard();
     ~mg_depth_draw_guard();

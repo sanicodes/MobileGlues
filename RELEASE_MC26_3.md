@@ -1,4 +1,4 @@
-# MobileGlues (Sanicodes) 2.0.0-sanicodes.2
+# MobileGlues (Sanicodes) 2.0.0-sanicodes.3
 
 An ARM64 release of the Sanicodes fork with the Minecraft 26.3 shader fixes.
 The optimized native library uses CMake Release, ThinLTO and 16 KiB ELF page
@@ -11,9 +11,30 @@ The user reports that startup and the follow-up rendering checks worked on the
 Xiaomi 2311DRK48G, Mali-G615, Android 16, Zalith 2.7.2 with ANGLE. This is a
 fork release; compatibility beyond that setup has not been established.
 
+Version 3 addresses depth sampling in Fabulous / improved transparency mode,
+where water and clouds could appear over solid terrain. The depth-texture
+filter correction comes from HEBEI77's proposed upstream
+[PR #61](https://github.com/MobileGL-Dev/MobileGlues/pull/61), retained with its
+original commit authorship. Additional fixes keep nested draw guards from
+restoring sampler bindings too early, restore the correct active texture unit,
+and avoid recording sampler bindings the driver rejected. Unknown texture
+targets are also handled safely by the newly intercepted parameter queries.
+
+The correction applies to sized 2D depth/depth-stencil textures. Colour units
+sharing the same sampler keep their filtering. Shadow comparison filtering is
+preserved. Depth arrays and cube-map sampling are outside this correction.
+
+Validation for this change: 31 filter-decision checks, 20 tests of the actual
+texture/sampler wrappers with a driver model, the existing pixel/framebuffer
+tests, 81 Minecraft fragment shader variants, and a Release ARM64 build pass.
+On ANGLE/Vulkan/SwiftShader, the GLES test reproduced a stored depth of 0.75
+sampling as zero through the original filter pairing; the corrected pairing
+returned 191/255 with no GL error. Fabulous rendering on the user's Mali phone
+still needs a visual retest of the version 3 APK.
+
 ## Install or update
 
-Install `build/releases/MobileGlues-2.0.0-sanicodes.2-arm64.apk` directly over
+Install `build/releases/MobileGlues-2.0.0-sanicodes.3-arm64.apk` directly over
 the earlier test plugin or Sanicodes release. No uninstall is required.
 
 1. Open **MobileGlues (Sanicodes)** and tap **Allow access**. On Android 11+
@@ -34,7 +55,7 @@ access that shared directory; it is not used to scan unrelated files.
 The release preserves the earlier plugin's Android application ID and signing
 certificate so Android accepts the update. The app label, renderer label and
 version use the release name. The official plugin remains a separate app.
-The native driver version is `2.0.0-sanicodes.2`.
+The native driver version is `2.0.0-sanicodes.3`.
 
 Cache clearing removes only the shader cache and its pending write, and asks
 that Minecraft be closed first. Restoring defaults keeps the previous settings
@@ -88,9 +109,24 @@ The release also updates the previous signed APK in place.
 
 ```sh
 ANDROID_SDK_ROOT=/path/to/sdk bash MobileGlues-cpp/tests/android/run.sh \
-  emulator-5580 build/releases/MobileGlues-2.0.0-sanicodes.2-arm64.apk
+  emulator-5580 build/releases/MobileGlues-2.0.0-sanicodes.3-arm64.apk
 ```
 
 Use a disposable emulator. The runner refuses physical-device serials and
 restores the shared configuration after its screen checks. Its instrumentation
 APK uses the local release signing identity and is not included in the release.
+
+## Optional depth-sampling GLES check (Linux)
+
+```sh
+g++ -std=gnu++20 -I MobileGlues-cpp -I MobileGlues-cpp/include \
+  MobileGlues-cpp/tests/depth_filter_gles_test.cpp \
+  MobileGlues-cpp/gl/depth_filter.cpp -ldl -o /tmp/mg_depth_filter_gles_test
+MG_GLES_TEST_ANGLE_DIR="$ANDROID_SDK_ROOT/emulator/lib64/gles_angle" \
+  VK_ICD_FILENAMES=/path/to/vk_swiftshader_icd.json /tmp/mg_depth_filter_gles_test
+```
+
+Without `MG_GLES_TEST_ANGLE_DIR`, it uses the system surfaceless EGL/GLES driver.
+Some desktop drivers permit the original filter pairing, so only the explicit
+ANGLE mode requires the original sample to be zero. Both modes require the
+corrected sample to match the stored depth and the draw to return no GL error.

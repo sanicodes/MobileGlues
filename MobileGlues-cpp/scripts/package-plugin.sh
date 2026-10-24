@@ -15,9 +15,9 @@ if [[ ${MOBILEGLUES_CHANNEL:-release} == test ]]; then
 else
     app_name='MobileGlues (Sanicodes)'
     description='MobileGlues (Sanicodes, OpenGL 4.0)'
-    version_name='2.0.0-sanicodes.1'
-    version_code=200001
-    default_output="$root/build/releases/MobileGlues-2.0.0-sanicodes.1-arm64.apk"
+    version_name='2.0.0-sanicodes.2'
+    version_code=200002
+    default_output="$root/build/releases/MobileGlues-2.0.0-sanicodes.2-arm64.apk"
 fi
 output=${2:-$default_output}
 mkdir -p "$(dirname "$output")"
@@ -30,9 +30,18 @@ cat > "$work/AndroidManifest.xml" <<XML
     package="com.fcl.plugin.mobileglues.mc26test"
     android:versionCode="$version_code" android:versionName="$version_name">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <queries>
+        <package android:name="com.movtery.zalithlauncher.v2" />
+        <package android:name="com.movtery.zalithlauncher.v2.debug" />
+    </queries>
     <application android:label="$app_name" android:icon="@drawable/ic_launcher"
+        android:theme="@style/PluginTheme" android:requestLegacyExternalStorage="true"
         android:debuggable="false" android:extractNativeLibs="true">
         <activity android:name="com.fcl.plugin.mobileglues.mc26test.MainActivity"
+            android:windowSoftInputMode="adjustResize|stateAlwaysHidden"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -50,9 +59,9 @@ cat > "$work/AndroidManifest.xml" <<XML
 XML
 mkdir -p "$work/classes"
 javac -source 8 -target 8 -Xlint:-options -classpath "$sdk/platforms/android-36/android.jar" \
-    -d "$work/classes" "$root/MobileGlues-cpp/scripts/plugin/MainActivity.java"
+    -d "$work/classes" "$root/MobileGlues-cpp/scripts/plugin/"*.java
 "$tools/d8" --release --min-api 26 --lib "$sdk/platforms/android-36/android.jar" \
-    --output "$work" "$work/classes/com/fcl/plugin/mobileglues/mc26test/MainActivity.class"
+    --output "$work" "$work/classes/com/fcl/plugin/mobileglues/mc26test/"*.class
 "$tools/aapt2" compile --dir "$root/MobileGlues-cpp/scripts/plugin/res" -o "$work/resources.zip"
 "$tools/aapt2" link --manifest "$work/AndroidManifest.xml" \
     -I "$sdk/platforms/android-36/android.jar" -o "$work/unsigned.apk" "$work/resources.zip"

@@ -48,8 +48,9 @@ library extracted successfully. The update used the existing signing key.
 2. In the isolated vanilla 26.3 instance, select
    **MobileGlues MC26.3 shader fix (test)** as the renderer.
 3. Keep the existing ANGLE setting enabled and shader/program error ignoring
-   disabled. Settings are read from the existing shared `/sdcard/MG` directory;
-   use the official plugin's settings app if a setting needs changing.
+   disabled. Settings are read from the existing shared `/sdcard/MG` directory.
+   Sanicodes release 2 provides its own settings screen; the older test APKs
+   used the official plugin's settings app.
 4. Launch the game. Confirm the launcher log's renderer library path contains
    `com.fcl.plugin.mobileglues.mc26test` so the correct build is being tested.
 5. Check the main menu and create a disposable world. Check terrain, text,
